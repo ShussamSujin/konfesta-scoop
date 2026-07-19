@@ -836,7 +836,7 @@ function App() {
             {EV.badge}
           </p>
           <h1 className="mt-1.5 text-2xl font-black tracking-tight sm:text-3xl" style={{ color: INK }}>
-            {EV.titlePre}<span style={{ color: CORAL }}>{EV.titleAccent}</span>
+            {EV.titlePre}<span style={{ color: CORAL, whiteSpace: "nowrap" }}>{EV.titleAccent}</span>
           </h1>
           <p className="mx-auto mt-2 max-w-xl text-xs leading-relaxed sm:text-sm" style={{ color: MUTED }}>
             {EV.desc}
