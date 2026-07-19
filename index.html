@@ -25,18 +25,18 @@ const { useState, useMemo } = React;
 const FLAVORS = [
   { color: "#D93A3A", cname: "빨강",  name: "알뜰 딸기 스무디", host: "임슬기", topic: "예산 · 소액~중간", zone: 0, tables: 2 },
   { color: "#F08A24", cname: "주황",  name: "새콤 망고 탱고",   host: "임슬기", topic: "예산 · 소액~중간", zone: 0, tables: 2 },
-  { color: "#EFBE2A", cname: "노랑",  name: "화끈 파인 번개",   host: "송희",   topic: "예산 · 대규모",   zone: 0, tables: 2 },
+  { color: "#EFBE2A", cname: "노랑",  name: "화끈 파인 번개",   host: "김송희", topic: "예산 · 대규모",   zone: 0, tables: 2 },
   { color: "#3FA45B", cname: "초록",  name: "멜론 소다",       host: "김태연", topic: "Gemini",          zone: 1, tables: 2 },
   { color: "#4FB6E8", cname: "하늘",  name: "블루 하와이",     host: "박준열", topic: "ChatGPT",         zone: 1, tables: 2 },
   { color: "#2E3D6B", cname: "남색",  name: "미드나잇 소르베", host: "이희수", topic: "Claude",          zone: 1, tables: 2 },
-  { color: "#45BFAE", cname: "민트",  name: "시원소다",        host: "두일",   topic: "senGPT",          zone: 1, tables: 2 },
+  { color: "#45BFAE", cname: "민트",  name: "시원소다",        host: "김두일", topic: "senGPT",          zone: 1, tables: 2 },
   { color: "#7A4C9E", cname: "보라",  name: "포도 알알이",     host: "김채은", topic: "네트워킹 · 성과", zone: 2, tables: 3 },
   { color: "#9B85C4", cname: "연보라", name: "라벤더 허니",     host: "이수진", topic: "디선당 · 사회·총괄", zone: 2, tables: 3 },
 ];
 
 const ZONES = [
-  { key: "예산존", flavors: [0, 1, 2], staff: "임슬기 · 송희" },
-  { key: "보고서존", flavors: [3, 4, 5, 6], staff: "김태연 · 박준열 · 이희수 · 두일" },
+  { key: "예산존", flavors: [0, 1, 2], staff: "임슬기 · 김송희" },
+  { key: "보고서존", flavors: [3, 4, 5, 6], staff: "김태연 · 박준열 · 이희수 · 김두일" },
   { key: "네트워킹존", flavors: [7, 8], staff: "김채은 · 이수진(디선당)" },
 ];
 
