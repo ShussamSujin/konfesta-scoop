@@ -135,13 +135,20 @@ const input = { background: "#FFF9F1", border: `2px solid ${LINE_SOFT}`, borderR
 /* 자리별 총원(세 라운드 합) */
 const totalOf = (counts, f) => (counts[0][f] || 0) + (counts[1][f] || 0) + (counts[2][f] || 0);
 
-/* 정원: 라운드당 기본 20 → 7개 자리(총원 기준) 모두 마감이면 +2 자동 상향, 상한 25 */
-function capacityFor(counts, settings) {
+/* 정원 (노쇼 대비 자동 상향)
+   라운드당 기본 20명. 7개 자리가 모두 마감됐는데 미등록자가 남으면
+   전 자리 +2씩 자동 상향. 상한은 테이블당 12명 기준
+   (2테이블 자리 24명 · 보라는 테이블 수 × 12명). */
+function capInfo(counts, settings) {
   const base = (settings && settings.baseCap) || 20;
-  const max = (settings && settings.maxCap) || 25;
-  let cap = base;
-  while (cap < max && FLAVORS.every((_, f) => totalOf(counts, f) >= 3 * cap)) cap = Math.min(max, cap + 2);
-  return cap;
+  const perTable = (settings && settings.perTable) || 12;
+  const ceilOf = (f) => FLAVORS[f].tables * perTable;
+  const capAt = (f, lvl) => Math.min(base + 2 * lvl, ceilOf(f));
+  const allClosed = (lvl) => FLAVORS.every((_, f) => totalOf(counts, f) >= 3 * capAt(f, lvl));
+  const canRaise = (lvl) => FLAVORS.some((_, f) => capAt(f, lvl) < ceilOf(f));
+  let lvl = 0;
+  while (allClosed(lvl) && canRaise(lvl)) lvl++;
+  return { level: lvl, roundCap: base + 2 * lvl, capOf: (f) => capAt(f, lvl) };
 }
 
 const emptyCounts = () => [Array(N).fill(0), Array(N).fill(0), Array(N).fill(0)];
@@ -160,13 +167,13 @@ function tally(regs) {
    ④ 보고서 스쿱 1개 이상
    ⑤ 모든 라운드에 정원 상한 적용 — 정원 미만인 자리 중
       인원이 가장 적은 곳부터 채워 어느 한쪽도 넘치지 않게 분산 */
-function autoStops(choice, scale, counts, cap) {
+function autoStops(choice, scale, counts, capOf) {
   const bf = scaleFlavor(scale);
   const stops = [null, null, null];
   // 필수 맛(고른 주제·예산 스쿱)을 각각 가장 여유 있는 라운드에 배치
   const placeReq = (f) => {
     const rounds = [0, 1, 2].filter((r) => stops[r] === null);
-    const under = rounds.filter((r) => counts[r][f] < cap);
+    const under = rounds.filter((r) => counts[r][f] < capOf(f));
     const use = under.length ? under : rounds;
     use.sort((a, b) => (counts[a][f] - counts[b][f]) || (a - b));
     stops[use[0]] = f;
@@ -176,7 +183,7 @@ function autoStops(choice, scale, counts, cap) {
   // 남은 라운드 채우기: 정원 미만 우선 + 인원 적은 순 (전부 찼을 때만 최소 인원으로 초과 허용)
   const pickFill = (round, used, pool) => {
     const cands = pool.filter((f) => !used.includes(f));
-    const under = cands.filter((f) => counts[round][f] < cap);
+    const under = cands.filter((f) => counts[round][f] < capOf(f));
     const use = under.length ? under : cands;
     use.sort((a, b) => (counts[round][a] - counts[round][b]) || (a - b));
     return use[0];
@@ -306,9 +313,9 @@ function Register({ settings, onDone }) {
     if (!state || !state.counts) return emptyCounts();
     return state.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0));
   }, [state]);
-  const cap = capacityFor(counts, settings);
+  const ci = capInfo(counts, settings);
   // 자리별 총 정원 = 라운드당 정원 × 3라운드 (고른 주제는 세 라운드 중 한 번 들어가므로)
-  const leftOf = (f) => Math.max(0, 3 * cap - totalOf(counts, f));
+  const leftOf = (f) => Math.max(0, 3 * ci.capOf(f) - totalOf(counts, f));
   const scaleLeft = (key) => leftOf(scaleFlavor(key));
   const schools = useMemo(
     () => String((settings && settings.schools) || "").split("\n").map((s) => s.trim()).filter(Boolean),
@@ -337,16 +344,16 @@ function Register({ settings, onDone }) {
         const c = st && st.counts
           ? st.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0))
           : emptyCounts();
-        const capNow = capacityFor(c, settings);
-        if (totalOf(c, scaleFlavor(scale)) >= 3 * capNow) {
+        const ciNow = capInfo(c, settings);
+        if (totalOf(c, scaleFlavor(scale)) >= 3 * ciNow.capOf(scaleFlavor(scale))) {
           setErr("해당 예산 규모가 마감되었습니다. 운영진에게 문의해 주세요.");
           setBusy(false); setScale(null); return;
         }
-        if (totalOf(c, color) >= 3 * capNow) {
+        if (totalOf(c, color) >= 3 * ciNow.capOf(color)) {
           setErr("방금 그 주제가 마감되었습니다. 다른 주제를 골라 주세요.");
           setBusy(false); setColor(null); return;
         }
-        const stops = autoStops(color, scale, c, capNow);
+        const stops = autoStops(color, scale, c, ciNow.capOf);
         stops.forEach((f, i) => { c[i][f] += 1; });
         const seq = ((st && st.seq) || 0) + 1;
         const status = await dbPutIfMatch("state", etag, { seq, counts: c });
@@ -417,7 +424,7 @@ function Register({ settings, onDone }) {
 
         <div className="mt-5 flex items-baseline justify-between">
           <span className="text-xs font-extrabold" style={{ color: MUTED }}>② 꼭 담고 싶은 주제 선택 <span style={{ color: FAINT }}>(순서는 자동)</span></span>
-          <span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: CHIP, color: FAINT }}>라운드당 정원 {cap}명</span>
+          <span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: CHIP, color: FAINT }}>라운드당 정원 {ci.roundCap}명</span>
         </div>
         <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           {FLAVORS.map((f, fi) => {
@@ -716,7 +723,7 @@ function Admin({ active }) {
 
   const [schools, setSchools] = useState("");
   const [baseCap, setBaseCap] = useState(20);
-  const [maxCap, setMaxCap] = useState(25);
+  const [perTable, setPerTable] = useState(12);
   const [tierText, setTierText] = useState(EV.tierDefault);
   const [msg, setMsg] = useState("");
   const loaded = useRef(false);
@@ -725,7 +732,7 @@ function Admin({ active }) {
     loaded.current = true;
     if (settings.schools) setSchools(String(settings.schools));
     if (settings.baseCap) setBaseCap(settings.baseCap);
-    if (settings.maxCap) setMaxCap(settings.maxCap);
+    if (settings.perTable) setPerTable(settings.perTable);
     if (settings.tierText) setTierText(settings.tierText);
   }, [settings]);
 
@@ -751,7 +758,7 @@ function Admin({ active }) {
   }
 
   const counts = tally(regs);
-  const cap = capacityFor(counts, settings);
+  const ci = capInfo(counts, settings);
   const prevWinnerIds = new Set(
     Object.values(draws || {}).flatMap((d) => (d.tiers || []).flatMap((t) => (t.winners || []).map((w) => w.id)))
   );
@@ -759,7 +766,7 @@ function Admin({ active }) {
   function note(t) { setMsg(t); setTimeout(() => setMsg(""), 4000); }
 
   async function saveSettings() {
-    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, maxCap: Number(maxCap) || 25, tierText });
+    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, perTable: Number(perTable) || 12, tierText });
     note("설정을 저장했습니다.");
   }
 
@@ -838,8 +845,8 @@ function Admin({ active }) {
       <div className="p-5" style={card()}>
         <h2 className="text-base font-black" style={{ color: CORAL }}>현황</h2>
         <p className="mt-1.5 text-sm" style={{ color: MUTED }}>
-          등록 <b style={{ color: INK }}>{regs.length}명</b> · 현재 자리별 정원 <b style={{ color: INK }}>{cap}명</b>
-          {cap > ((settings && settings.baseCap) || 20) && " (자동 상향 적용)"}
+          등록 <b style={{ color: INK }}>{regs.length}명</b> · 현재 라운드당 정원 <b style={{ color: INK }}>{ci.roundCap}명</b>
+          {ci.level > 0 && ` (자동 상향 +${ci.level * 2})`}
         </p>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -855,7 +862,7 @@ function Admin({ active }) {
                   </td>
                   {[0, 1, 2].map((r) => (
                     <td key={r} className="px-2 py-2 font-black tabular-nums"
-                      style={{ color: counts[r][fi] > cap ? DANGER : INK }}>{counts[r][fi]}</td>
+                      style={{ color: counts[r][fi] > ci.capOf(fi) ? DANGER : INK }}>{counts[r][fi]}</td>
                   ))}
                 </tr>
               ))}
@@ -876,11 +883,14 @@ function Admin({ active }) {
               className="w-16 px-2 py-1.5 text-sm font-bold" style={input} />
           </label>
           <label className="flex items-center gap-2 text-xs font-extrabold" style={{ color: MUTED }}>
-            정원 상한 <input type="number" value={maxCap} onChange={(e) => setMaxCap(e.target.value)}
+            테이블당 상한 <input type="number" value={perTable} onChange={(e) => setPerTable(e.target.value)}
               className="w-16 px-2 py-1.5 text-sm font-bold" style={input} />
           </label>
         </div>
-        <p className="mt-1.5 text-[11px]" style={{ color: FAINT }}>7개 자리가 모두 마감되면 정원이 +2씩 자동 상향됩니다 (상한까지).</p>
+        <p className="mt-1.5 text-[11px]" style={{ color: FAINT }}>
+          7개 자리가 모두 마감되면 정원이 +2씩 자동 상향됩니다. 상한은 테이블당 {perTable}명 기준
+          — 2테이블 자리 {perTable * 2}명 · 보라({EV.purpleTables}테이블) {perTable * EV.purpleTables}명.
+        </p>
         <label className="mt-3 block text-xs font-extrabold" style={{ color: MUTED }}>등수별 경품·인원 (한 줄에 “이름,인원”)</label>
         <textarea value={tierText} onChange={(e) => setTierText(e.target.value)} rows={4}
           className="mt-1.5 w-full px-4 py-3 text-sm outline-none focus:ring-2" style={input} />
