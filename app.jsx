@@ -17,7 +17,7 @@ const EVENTS = {
     badge: "플레이버 워크숍 · B구역 · 중등",
     titlePre: "디선 31 · 골라 담는 ",
     titleAccent: "운영 꿀팁 3스쿱",
-    desc: "예산 규모와 시작 주제를 고르면 3스쿱이 즉시 확정됩니다. 배정된 자리는 고정이에요.",
+    desc: "예산 규모와 꼭 담고 싶은 주제를 고르면 3스쿱이 즉시 확정됩니다. 배정된 자리는 고정이에요.",
     dbPath: "konfesta31/mid",
     hosts: ["임슬기", "김송희", "김태연", "박준열", "이희수", "김두일", "김채은"],
     purpleTables: 3,
@@ -28,7 +28,7 @@ const EVENTS = {
     badge: "2026학년도 AI·디지털 활용 선도학교(초등) 공유회 · C구역",
     titlePre: "디지털 러닝 하프타임 · 운영의 ",
     titleAccent: "Flav-er",
-    desc: "예산 규모와 시작 주제를 고르면 3스쿱이 즉시 확정됩니다. 배정된 자리는 고정이에요.",
+    desc: "예산 규모와 꼭 담고 싶은 주제를 고르면 3스쿱이 즉시 확정됩니다. 배정된 자리는 고정이에요.",
     dbPath: "konfesta31/el",
     hosts: ["정준용", "김여미", "홍성용", "김경상", "백인규", "김승현", "이소영"],
     purpleTables: 2,
@@ -132,12 +132,15 @@ const SHADOW = "0 10px 24px rgba(240,119,107,.14)";
 const card = (extra) => ({ background: CARD, border: `2.5px solid ${LINE}`, borderRadius: 28, boxShadow: SHADOW, ...extra });
 const input = { background: "#FFF9F1", border: `2px solid ${LINE_SOFT}`, borderRadius: 18, color: INK };
 
-/* 정원: 기본 20 → 7개 자리 모두 마감이면 +2 자동 상향, 상한 25 */
+/* 자리별 총원(세 라운드 합) */
+const totalOf = (counts, f) => (counts[0][f] || 0) + (counts[1][f] || 0) + (counts[2][f] || 0);
+
+/* 정원: 라운드당 기본 20 → 7개 자리(총원 기준) 모두 마감이면 +2 자동 상향, 상한 25 */
 function capacityFor(counts, settings) {
   const base = (settings && settings.baseCap) || 20;
   const max = (settings && settings.maxCap) || 25;
   let cap = base;
-  while (cap < max && FLAVORS.every((_, f) => (counts[0][f] || 0) >= cap)) cap = Math.min(max, cap + 2);
+  while (cap < max && FLAVORS.every((_, f) => totalOf(counts, f) >= 3 * cap)) cap = Math.min(max, cap + 2);
   return cap;
 }
 
@@ -149,42 +152,44 @@ function tally(regs) {
   return c;
 }
 
-/* 2·3스쿱 자동 배정 (규칙)
+/* 3스쿱 자동 배정 (규칙)
    ① 같은 맛 중복 방문 금지
-   ② 예산 스쿱 정확히 1개 — 등록 시 고른 예산 규모대로
+   ② 고른 주제는 세 라운드 중 한 번 꼭 포함 — 라운드(순서)는 자동
+   ③ 예산 스쿱 정확히 1개 — 등록 시 고른 예산 규모대로
       (1,000만원 이내 → 1번 빨강·주황 / 초과 → 2번 노랑)
-   ③ 보고서 스쿱 1개 이상
-   ④ 모든 라운드에 정원 상한 적용 — 정원 미만인 자리 중
+   ④ 보고서 스쿱 1개 이상
+   ⑤ 모든 라운드에 정원 상한 적용 — 정원 미만인 자리 중
       인원이 가장 적은 곳부터 채워 어느 한쪽도 넘치지 않게 분산 */
-function autoStops(first, scale, counts, cap) {
+function autoStops(choice, scale, counts, cap) {
   const bf = scaleFlavor(scale);
-  // 정원 미만인 후보 우선, 그 안에서 인원 적은 순 (전부 찼을 때만 최소 인원으로 초과 허용)
-  const pick = (round, used, pool) => {
+  const stops = [null, null, null];
+  // 필수 맛(고른 주제·예산 스쿱)을 각각 가장 여유 있는 라운드에 배치
+  const placeReq = (f) => {
+    const rounds = [0, 1, 2].filter((r) => stops[r] === null);
+    const under = rounds.filter((r) => counts[r][f] < cap);
+    const use = under.length ? under : rounds;
+    use.sort((a, b) => (counts[a][f] - counts[b][f]) || (a - b));
+    stops[use[0]] = f;
+  };
+  placeReq(choice);
+  if (choice !== bf) placeReq(bf);
+  // 남은 라운드 채우기: 정원 미만 우선 + 인원 적은 순 (전부 찼을 때만 최소 인원으로 초과 허용)
+  const pickFill = (round, used, pool) => {
     const cands = pool.filter((f) => !used.includes(f));
     const under = cands.filter((f) => counts[round][f] < cap);
     const use = under.length ? under : cands;
     use.sort((a, b) => (counts[round][a] - counts[round][b]) || (a - b));
     return use[0];
   };
-  if (BUDGET.includes(first)) {
-    // 시작이 예산(= 고른 규모) → 나머지는 보고서 1개 보장 + 보고서/네트워킹
-    const s2 = pick(1, [first], REPORT);
-    const s3 = pick(2, [first, s2], NONBUDGET);
-    return [first, s2, s3];
+  for (let r = 0; r < 3; r++) {
+    if (stops[r] !== null) continue;
+    const used = stops.filter((x) => x !== null);
+    const hasReport = used.some((f) => REPORT.includes(f));
+    const emptyLeft = stops.filter((x) => x === null).length;
+    // 마지막 빈 라운드까지 보고서가 없으면 보고서에서 뽑아 ④를 보장
+    const pool = hasReport || emptyLeft > 1 ? NONBUDGET : REPORT;
+    stops[r] = pickFill(r, used, pool);
   }
-  // 시작이 보고서/네트워킹 → 남은 두 자리 = 예산(규모 맛) 1개 + 나머지 1개
-  // 예산 스쿱은 2·3라운드 중 정원이 남고 덜 찬 라운드에 배치
-  const otherPool = REPORT.includes(first) ? NONBUDGET : REPORT; // 보라로 시작하면 보고서 필수
-  const r2n = counts[1][bf], r3n = counts[2][bf];
-  const r2ok = r2n < cap, r3ok = r3n < cap;
-  let bRound;
-  if (r2ok && !r3ok) bRound = 1;
-  else if (!r2ok && r3ok) bRound = 2;
-  else bRound = r2n <= r3n ? 1 : 2;
-  const oRound = bRound === 1 ? 2 : 1;
-  const other = pick(oRound, [first, bf], otherPool);
-  const stops = [first, 0, 0];
-  stops[bRound] = bf; stops[oRound] = other;
   return stops;
 }
 
@@ -302,9 +307,9 @@ function Register({ settings, onDone }) {
     return state.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0));
   }, [state]);
   const cap = capacityFor(counts, settings);
-  // 예산 규모별 총 정원 = 라운드당 정원 × 3라운드 (예산 부스는 매 라운드 그 규모 사람들만 받으므로)
-  const sc = (state && state.sc) || {};
-  const scaleLeft = (key) => Math.max(0, 3 * cap - (sc[key] || 0));
+  // 자리별 총 정원 = 라운드당 정원 × 3라운드 (고른 주제는 세 라운드 중 한 번 들어가므로)
+  const leftOf = (f) => Math.max(0, 3 * cap - totalOf(counts, f));
+  const scaleLeft = (key) => leftOf(scaleFlavor(key));
   const schools = useMemo(
     () => String((settings && settings.schools) || "").split("\n").map((s) => s.trim()).filter(Boolean),
     [settings]
@@ -312,7 +317,7 @@ function Register({ settings, onDone }) {
 
   function pickScale(s) {
     setScale(s); setErr("");
-    // 반대 규모의 예산 맛을 시작으로 골라 뒀다면 해제
+    // 반대 규모의 예산 맛을 골라 뒀다면 해제
     if (color !== null && BUDGET.includes(color) && color !== scaleFlavor(s)) setColor(null);
   }
 
@@ -320,7 +325,7 @@ function Register({ settings, onDone }) {
     const s = school.trim(), n = name.trim();
     if (!n) { setErr("이름을 입력해 주세요."); return; }
     if (!scale) { setErr("우리 학교 예산 규모를 먼저 골라 주세요."); return; }
-    if (color === null) { setErr("1스쿱으로 시작할 주제를 골라 주세요."); return; }
+    if (color === null) { setErr("꼭 담고 싶은 주제를 골라 주세요."); return; }
     if (BUDGET.includes(color) && color !== scaleFlavor(scale)) {
       setErr("고른 예산 규모와 다른 예산 부스입니다. 다시 선택해 주세요."); return;
     }
@@ -333,23 +338,18 @@ function Register({ settings, onDone }) {
           ? st.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0))
           : emptyCounts();
         const capNow = capacityFor(c, settings);
-        if ((c[0][color] || 0) >= capNow) {
-          setErr("방금 그 주제가 마감되었습니다. 다른 주제를 골라 주세요.");
-          setBusy(false); setColor(null); return;
-        }
-        const scNow = {
-          low: ((st && st.sc && st.sc.low) || 0),
-          high: ((st && st.sc && st.sc.high) || 0),
-        };
-        if (scNow[scale] >= 3 * capNow) {
+        if (totalOf(c, scaleFlavor(scale)) >= 3 * capNow) {
           setErr("해당 예산 규모가 마감되었습니다. 운영진에게 문의해 주세요.");
           setBusy(false); setScale(null); return;
         }
+        if (totalOf(c, color) >= 3 * capNow) {
+          setErr("방금 그 주제가 마감되었습니다. 다른 주제를 골라 주세요.");
+          setBusy(false); setColor(null); return;
+        }
         const stops = autoStops(color, scale, c, capNow);
         stops.forEach((f, i) => { c[i][f] += 1; });
-        scNow[scale] += 1;
         const seq = ((st && st.seq) || 0) + 1;
-        const status = await dbPutIfMatch("state", etag, { seq, counts: c, sc: scNow });
+        const status = await dbPutIfMatch("state", etag, { seq, counts: c });
         if (status === 200) assigned = { stops, seq };
         else if (status === 412) await new Promise((r) => setTimeout(r, 150 + Math.random() * 400));
         else throw new Error("save " + status);
@@ -391,8 +391,8 @@ function Register({ settings, onDone }) {
       <div className="p-6" style={card()}>
         <h2 className="text-xl font-black" style={{ color: CORAL }}>셀프 등록</h2>
         <p className="mt-1.5 text-xs leading-relaxed" style={{ color: MUTED }}>
-          3스쿱에는 <b style={{ color: INK }}>예산 스쿱 1개 + 보고서 스쿱 1개 이상</b>이 꼭 담기도록 자동 배정됩니다.
-          고른 주제가 <b style={{ color: INK }}>1스쿱 고정 자리</b>가 돼요.
+          <b style={{ color: INK }}>고른 주제와 예산 스쿱은 세 라운드 중 꼭 한 번씩</b> 들어가고,
+          보고서 스쿱도 1개 이상 담깁니다. 순서(라운드)는 붐비지 않게 자동으로 정해져요.
         </p>
 
         <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>학교 <span style={{ color: FAINT }}>(선택)</span></label>
@@ -416,13 +416,12 @@ function Register({ settings, onDone }) {
         </div>
 
         <div className="mt-5 flex items-baseline justify-between">
-          <span className="text-xs font-extrabold" style={{ color: MUTED }}>② 1스쿱으로 시작할 주제 선택</span>
-          <span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: CHIP, color: FAINT }}>자리별 정원 {cap}명</span>
+          <span className="text-xs font-extrabold" style={{ color: MUTED }}>② 꼭 담고 싶은 주제 선택 <span style={{ color: FAINT }}>(순서는 자동)</span></span>
+          <span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: CHIP, color: FAINT }}>라운드당 정원 {cap}명</span>
         </div>
         <div className="mt-2.5 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
           {FLAVORS.map((f, fi) => {
-            const used = counts[0][fi] || 0;
-            const left = Math.max(0, cap - used);
+            const left = leftOf(fi);
             const full = left === 0;
             const wrongBudget = BUDGET.includes(fi) && scale !== null && fi !== scaleFlavor(scale);
             const needScale = BUDGET.includes(fi) && scale === null;
