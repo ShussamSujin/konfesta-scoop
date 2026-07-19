@@ -1,0 +1,444 @@
+﻿import React, { useState, useMemo } from "react";
+
+/* ─────────────────────────────────────────────────────────────
+   플레이버 워크숍 · 3스쿱 배정기
+   8가지 맛을 시계방향 원형으로 두고, 각자 "걸음수"만큼 돌며 3스쿱을 담는다.
+   ───────────────────────────────────────────────────────────── */
+
+// 시계방향 배치 순서 (0시 방향부터)
+// 도구 맛을 0,1,4,5번 자리에 둔 이유: 어떤 걸음수로 돌아도
+// 도구만 3개, 또는 도구 없이 3개가 되는 경우가 생기지 않는다.
+const FLAVORS = [
+  { pos: 0, color: "#D93A3A", name: "알뜰딸기스무디", host: "박준열", topic: "ChatGPT · 사전·사후 조사", cat: "도구", tables: 2 },
+  { pos: 1, color: "#2E3D6B", name: "미드나잇 블루베리", host: "김태연", topic: "Gemini · 교학공 운영", cat: "도구", tables: 2 },
+  { pos: 2, color: "#F08A24", name: "새콤망고탱고", host: "임슬기", topic: "소액 예산 · 1,000만원 이내", cat: "예산", tables: 3 },
+  { pos: 3, color: "#45BFAE", name: "시원 소다", host: "김채은", topic: "총정리 · 선도학교 뭐든지 챗봇", cat: "네트워킹", tables: 3 },
+  { pos: 4, color: "#3FA45B", name: "멜론 소다", host: "이희수", topic: "Claude · 성과공유 보고회", cat: "도구", tables: 2 },
+  { pos: 5, color: "#7A4C9E", name: "포도 알알이", host: "김두일", topic: "senGPT · 성과보고서", cat: "도구", tables: 2 },
+  { pos: 6, color: "#EFBE2A", name: "화끈파인번개", host: "송희", topic: "고액 예산 · 1,000만원 이상", cat: "예산", tables: 3 },
+  { pos: 7, color: "#9B85C4", name: "라벤더 허니", host: "이수진", topic: "용한 디선당 · 상담", cat: "네트워킹", tables: 3 },
+];
+
+// 4걸음은 세 번째에 제자리로 돌아와서 뺐다.
+const STEPS = [1, 2, 3, 5, 6, 7];
+
+const INK = "#3A2A24";
+const PAPER = "#FFFDF7";
+const RULE = "#E6DCCB";
+const MUTED = "#7A6A5E";
+const FAINT = "#A9998B";
+
+/* 배정: 번호 하나로 시작 맛과 걸음수가 정해진다 */
+function assign(no) {
+  const i = no - 1;
+  const start = i % 8;
+  const step = STEPS[Math.floor(i / 8) % 6];
+  const stops = [0, 1, 2].map((r) => (start + r * step) % 8);
+  return { no, start, step, stops };
+}
+
+/* ── 콘 카드 ── */
+function Cone({ stops, size = 1 }) {
+  return (
+    <svg viewBox="0 0 150 210" width={150 * size} height={210 * size}
+      role="img" aria-label="3스쿱 콘">
+      <defs>
+        <pattern id="wf" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="9" height="9" fill="#D9A566" />
+          <path d="M0 0H9M0 0V9" stroke="#B9803F" strokeWidth="1.2" />
+        </pattern>
+      </defs>
+      <polygon points="46,124 104,124 75,200" fill="url(#wf)" stroke="#B9803F" strokeWidth="2" />
+      {[2, 1, 0].map((i) => {
+        const cy = [118, 84, 52][i];
+        const r = [35, 33, 30][i];
+        return (
+          <g key={i}>
+            <circle cx="75" cy={cy} r={r} fill={FLAVORS[stops[i]].color}
+              stroke="rgba(0,0,0,.18)" strokeWidth="2" />
+            <text x="75" y={cy + 7} textAnchor="middle" fontSize="20" fontWeight="900" fill="#fff">
+              {i + 1}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ── 원형 배치도 ── */
+function Ring({ stops, size = 300 }) {
+  const C = 150, R = 108;
+  const pt = (p) => {
+    const a = (p / 8) * 2 * Math.PI - Math.PI / 2;
+    return [C + R * Math.cos(a), C + R * Math.sin(a)];
+  };
+  return (
+    <svg viewBox="0 0 300 300" width={size} height={size} role="img" aria-label="맛 배치도">
+      <circle cx={C} cy={C} r={R} fill="none" stroke={RULE} strokeWidth="2" strokeDasharray="4 6" />
+      {stops && stops.slice(0, 2).map((s, i) => {
+        const [x1, y1] = pt(s);
+        const [x2, y2] = pt(stops[i + 1]);
+        return (
+          <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+            stroke={INK} strokeWidth="2.5" strokeLinecap="round"
+            strokeDasharray={i === 0 ? "none" : "7 5"} />
+        );
+      })}
+      {FLAVORS.map((f) => {
+        const [x, y] = pt(f.pos);
+        const order = stops ? stops.indexOf(f.pos) : -1;
+        const on = order > -1;
+        return (
+          <g key={f.pos}>
+            <circle cx={x} cy={y} r={on ? 24 : 17} fill={f.color}
+              stroke={on ? INK : "rgba(0,0,0,.12)"} strokeWidth={on ? 3 : 2}
+              opacity={stops && !on ? 0.28 : 1} />
+            <text x={x} y={y + 6} textAnchor="middle" fontSize={on ? 17 : 13}
+              fontWeight="900" fill="#fff" opacity={stops && !on ? 0.5 : 1}>
+              {on ? order + 1 : f.pos + 1}
+            </text>
+          </g>
+        );
+      })}
+      <text x={C} y={C - 6} textAnchor="middle" fontSize="12" fontWeight="700" fill={FAINT}>시계방향</text>
+      <text x={C} y={C + 12} textAnchor="middle" fontSize="12" fontWeight="700" fill={FAINT}>→</text>
+    </svg>
+  );
+}
+
+export default function ScoopAssigner() {
+  const [total, setTotal] = useState(198);
+  const [seats, setSeats] = useState(13);
+  const [desks, setDesks] = useState(4);
+  const [tab, setTab] = useState("lookup");
+  const [query, setQuery] = useState("");
+  const [names, setNames] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const roster = useMemo(
+    () => Array.from({ length: total }, (_, i) => assign(i + 1)),
+    [total]
+  );
+  const nameList = useMemo(
+    () => names.split("\n").map((s) => s.trim()).filter(Boolean),
+    [names]
+  );
+
+  const found = useMemo(() => {
+    const n = parseInt(query, 10);
+    return n >= 1 && n <= total ? roster[n - 1] : null;
+  }, [query, roster, total]);
+
+  const load = useMemo(() => {
+    const m = FLAVORS.map(() => [0, 0, 0]);
+    roster.forEach((r) => r.stops.forEach((s, i) => { m[s][i] += 1; }));
+    let over = 0;
+    FLAVORS.forEach((f, i) => m[i].forEach((v) => { if (v > f.tables * seats) over += 1; }));
+    return { m, over };
+  }, [roster, seats]);
+
+  const deskRanges = useMemo(() => {
+    const per = Math.ceil(total / desks);
+    return Array.from({ length: desks }, (_, i) => ({
+      no: i + 1, from: i * per + 1, to: Math.min((i + 1) * per, total),
+    })).filter((d) => d.from <= total);
+  }, [total, desks]);
+
+  function csv() {
+    const head = ["번호", "이름", "걸음수", "1스쿱", "2스쿱", "3스쿱", "1스쿱발표자", "2스쿱발표자", "3스쿱발표자", "데스크"];
+    const body = roster.map((r) => {
+      const f = r.stops.map((s) => FLAVORS[s]);
+      const d = deskRanges.find((x) => r.no >= x.from && r.no <= x.to);
+      return [r.no, nameList[r.no - 1] || "", r.step, ...f.map((x) => x.name), ...f.map((x) => x.host), d ? d.no : ""].join(",");
+    });
+    return [head.join(","), ...body].join("\n");
+  }
+
+  async function copyCsv() {
+    try {
+      await navigator.clipboard.writeText(csv());
+      setMsg("배정표를 복사했습니다. 엑셀에 붙여넣으세요.");
+    } catch {
+      setMsg("복사에 실패했습니다. 아래 표를 직접 선택해 복사하세요.");
+    }
+    setTimeout(() => setMsg(""), 4000);
+  }
+
+  const TABS = [
+    { id: "lookup", label: "번호 조회" },
+    { id: "roster", label: "전체 배정표" },
+    { id: "load", label: "맛별 정원" },
+    { id: "map", label: "배치도 · 운영" },
+  ];
+
+  const field = (label, value, set, min, max) => (
+    <label key={label} className="flex items-center gap-2">
+      <span className="text-xs font-bold" style={{ color: MUTED }}>{label}</span>
+      <input type="number" value={value} min={min} max={max}
+        onChange={(e) => set(Math.max(min, Math.min(max, Number(e.target.value) || min)))}
+        className="w-20 rounded-lg px-2 py-1 text-sm font-bold tabular-nums outline-none focus:ring-2"
+        style={{ background: "#fff", border: `1px solid ${RULE}`, color: INK }} />
+    </label>
+  );
+
+  return (
+    <div className="min-h-screen w-full px-4 py-6 sm:px-8"
+      style={{ background: PAPER, color: INK, fontFamily: "'Pretendard','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif" }}>
+      <div className="mx-auto max-w-5xl">
+
+        <header className="mb-6">
+          <p className="text-xs font-bold tracking-[0.2em]" style={{ color: "#B0A091" }}>
+            플레이버 워크숍 · 2차 공유회 · B구역
+          </p>
+          <h1 className="mt-1 text-3xl font-black tracking-tight sm:text-4xl">3스쿱 배정기</h1>
+          <p className="mt-2 max-w-2xl text-sm" style={{ color: MUTED }}>
+            8가지 맛을 시계방향으로 둘러 세우고, 각자 정해진 걸음수만큼 돌면서 3스쿱을 담습니다.
+            번호 하나면 어느 맛을 어떤 순서로 담을지가 전부 정해집니다.
+          </p>
+        </header>
+
+        <div className="mb-6 flex flex-wrap gap-4 rounded-2xl px-4 py-3"
+          style={{ background: "#F7F1E6", border: `1px solid ${RULE}` }}>
+          {field("총 인원", total, setTotal, 8, 400)}
+          {field("테이블 좌석", seats, setSeats, 6, 20)}
+          {field("등록 데스크", desks, setDesks, 1, 8)}
+        </div>
+
+        <nav className="mb-5 flex flex-wrap gap-1" style={{ borderBottom: `2px solid ${RULE}` }}>
+          {TABS.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className="relative px-4 py-2 text-sm font-bold"
+              style={{ color: tab === t.id ? INK : FAINT }}>
+              {t.label}
+              {tab === t.id && <span className="absolute inset-x-0 -bottom-0.5 h-1 rounded-t" style={{ background: INK }} />}
+            </button>
+          ))}
+        </nav>
+
+        {/* 번호 조회 */}
+        {tab === "lookup" && (
+          <section>
+            <div className="mb-5 flex items-center gap-3">
+              <input value={query} onChange={(e) => setQuery(e.target.value)}
+                inputMode="numeric" placeholder="번호 입력"
+                className="w-40 rounded-xl px-4 py-3 text-2xl font-black tabular-nums outline-none focus:ring-2"
+                style={{ background: "#fff", border: `2px solid ${RULE}`, color: INK }} />
+              <span className="text-sm" style={{ color: FAINT }}>1 – {total}</span>
+            </div>
+
+            {!query && (
+              <p className="rounded-xl px-4 py-10 text-center text-sm" style={{ background: "#F7F1E6", color: FAINT }}>
+                명찰의 번호를 입력하면 담을 3스쿱이 나옵니다.
+              </p>
+            )}
+            {query && !found && (
+              <p className="rounded-xl px-4 py-10 text-center text-sm font-bold"
+                style={{ background: "#FBE9E7", color: "#B3261E" }}>
+                1부터 {total} 사이의 번호를 입력하세요.
+              </p>
+            )}
+
+            {found && (
+              <div className="rounded-2xl p-5" style={{ background: "#fff", border: `2px solid ${INK}` }}>
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-5xl font-black tabular-nums">{found.no}</div>
+                    <div className="mt-1 text-sm font-bold" style={{ color: MUTED }}>
+                      {nameList[found.no - 1] || "이름 미입력"}
+                    </div>
+                  </div>
+                  <div className="rounded-xl px-4 py-2 text-center" style={{ background: INK, color: "#fff" }}>
+                    <div className="text-[10px] font-bold tracking-widest opacity-70">걸음수</div>
+                    <div className="text-3xl font-black tabular-nums">{found.step}</div>
+                  </div>
+                </div>
+
+                <div className="mt-5 flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+                  <Cone stops={found.stops} size={0.85} />
+                  <div className="flex-1">
+                    {found.stops.map((s, i) => {
+                      const f = FLAVORS[s];
+                      return (
+                        <div key={i} className="flex items-center gap-3 py-2.5" style={{ borderTop: `1px solid ${RULE}` }}>
+                          <span className="w-4 text-center text-xs font-black" style={{ color: FAINT }}>{i + 1}</span>
+                          <span className="h-8 w-8 shrink-0 rounded-full" style={{ background: f.color }} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              <span className="font-bold">{f.name}</span>
+                              <span className="text-xs" style={{ color: FAINT }}>{f.pos + 1}번 자리 · {f.cat}</span>
+                            </div>
+                            <div className="truncate text-xs" style={{ color: MUTED }}>{f.host} · {f.topic}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <Ring stops={found.stops} size={220} />
+                </div>
+
+                <p className="mt-4 rounded-xl px-3 py-2 text-xs" style={{ background: "#F7F1E6", color: MUTED }}>
+                  등록 데스크에서 <b>1스쿱 색 손목 띠지</b>를 채워 주세요. 오프닝을 1스쿱 자리에서 듣고 이동 없이 시작합니다.
+                  이후에는 <b>시계방향으로 {found.step}칸</b>씩 두 번 옮기면 됩니다.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* 전체 배정표 */}
+        {tab === "roster" && (
+          <section>
+            <div className="mb-4 flex flex-wrap items-center gap-3">
+              <button onClick={copyCsv} className="rounded-xl px-4 py-2 text-sm font-bold text-white" style={{ background: INK }}>
+                배정표 복사 (CSV)
+              </button>
+              {msg && <span className="text-xs font-bold" style={{ color: "#3FA45B" }}>{msg}</span>}
+            </div>
+
+            <details className="mb-4 rounded-xl px-4 py-3" style={{ background: "#F7F1E6", border: `1px solid ${RULE}` }}>
+              <summary className="cursor-pointer text-sm font-bold">이름 붙여넣기 (선택)</summary>
+              <p className="mt-2 text-xs" style={{ color: MUTED }}>
+                한 줄에 한 명씩. 붙여넣은 순서대로 1번부터 매칭됩니다. 현재 {nameList.length}명.
+              </p>
+              <textarea value={names} onChange={(e) => setNames(e.target.value)} rows={5}
+                placeholder={"김○○\n이○○\n박○○"}
+                className="mt-2 w-full rounded-lg px-3 py-2 text-sm outline-none focus:ring-2"
+                style={{ background: "#fff", border: `1px solid ${RULE}` }} />
+            </details>
+
+            <div className="overflow-x-auto rounded-xl" style={{ border: `1px solid ${RULE}` }}>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr style={{ background: "#F7F1E6" }}>
+                    {["번호", "이름", "걸음수", "1스쿱", "2스쿱", "3스쿱", "데스크"].map((h) => (
+                      <th key={h} className="whitespace-nowrap px-3 py-2 text-xs font-bold" style={{ color: MUTED }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {roster.map((r) => {
+                    const d = deskRanges.find((x) => r.no >= x.from && r.no <= x.to);
+                    return (
+                      <tr key={r.no} style={{ borderTop: `1px solid ${RULE}` }}>
+                        <td className="px-3 py-1.5 font-black tabular-nums">{r.no}</td>
+                        <td className="whitespace-nowrap px-3 py-1.5" style={{ color: MUTED }}>{nameList[r.no - 1] || "—"}</td>
+                        <td className="px-3 py-1.5 font-bold tabular-nums">{r.step}</td>
+                        {r.stops.map((s, i) => (
+                          <td key={i} className="whitespace-nowrap px-3 py-1.5">
+                            <span className="mr-1.5 inline-block h-3 w-3 translate-y-0.5 rounded-full" style={{ background: FLAVORS[s].color }} />
+                            {FLAVORS[s].name}
+                          </td>
+                        ))}
+                        <td className="px-3 py-1.5 tabular-nums" style={{ color: MUTED }}>{d ? d.no : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* 맛별 정원 */}
+        {tab === "load" && (
+          <section>
+            <div className="mb-4 rounded-xl px-4 py-3 text-sm font-bold"
+              style={{ background: load.over ? "#FBE9E7" : "#E8F5E9", color: load.over ? "#B3261E" : "#1B5E20" }}>
+              {load.over
+                ? `정원을 넘는 칸이 ${load.over}곳 있습니다. 좌석 수를 늘리거나 총 인원을 확인하세요.`
+                : "모든 라운드가 정원 이내입니다. 이대로 확정해도 됩니다."}
+            </div>
+
+            <div className="overflow-x-auto rounded-xl" style={{ border: `1px solid ${RULE}` }}>
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr style={{ background: "#F7F1E6" }}>
+                    {["자리", "맛", "발표자", "테이블", "정원", "1스쿱", "2스쿱", "3스쿱"].map((h) => (
+                      <th key={h} className="px-3 py-2 text-xs font-bold" style={{ color: MUTED }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {FLAVORS.map((f, i) => {
+                    const cap = f.tables * seats;
+                    return (
+                      <tr key={f.pos} style={{ borderTop: `1px solid ${RULE}` }}>
+                        <td className="px-3 py-2 font-black tabular-nums" style={{ color: FAINT }}>{f.pos + 1}</td>
+                        <td className="whitespace-nowrap px-3 py-2 font-bold">
+                          <span className="mr-2 inline-block h-3.5 w-3.5 translate-y-0.5 rounded-full" style={{ background: f.color }} />
+                          {f.name}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2" style={{ color: MUTED }}>{f.host}</td>
+                        <td className="px-3 py-2 tabular-nums" style={{ color: MUTED }}>{f.tables}개</td>
+                        <td className="px-3 py-2 font-bold tabular-nums">{cap}</td>
+                        {load.m[i].map((v, r) => (
+                          <td key={r} className="px-3 py-2 font-black tabular-nums" style={{ color: v > cap ? "#B3261E" : INK }}>{v}</td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <p className="mt-3 text-xs" style={{ color: MUTED }}>
+              모든 맛이 라운드마다 총원의 8분의 1씩 받습니다. 도구 맛 4개는 테이블 2개, 예산·네트워킹 맛 4개는 테이블 3개로
+              발표자 슬라이드의 20개 배치를 그대로 씁니다.
+            </p>
+          </section>
+        )}
+
+        {/* 배치도 · 운영 */}
+        {tab === "map" && (
+          <section className="space-y-6 text-sm leading-relaxed" style={{ color: "#5C4B40" }}>
+            <div className="flex flex-col items-center gap-6 sm:flex-row sm:items-start">
+              <Ring size={300} />
+              <div className="flex-1">
+                <h2 className="mb-2 text-base font-black" style={{ color: INK }}>맛 자리 순서</h2>
+                {FLAVORS.map((f) => (
+                  <div key={f.pos} className="flex items-center gap-3 py-1.5" style={{ borderTop: `1px solid ${RULE}` }}>
+                    <span className="w-4 text-center text-xs font-black" style={{ color: FAINT }}>{f.pos + 1}</span>
+                    <span className="h-5 w-5 shrink-0 rounded-full" style={{ background: f.color }} />
+                    <span className="font-bold" style={{ color: INK }}>{f.name}</span>
+                    <span className="text-xs" style={{ color: MUTED }}>{f.host} · {f.cat}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-xl p-4" style={{ background: "#F7F1E6" }}>
+              <h2 className="mb-2 text-base font-black" style={{ color: INK }}>MC 멘트는 한 줄이면 됩니다</h2>
+              <p className="text-lg font-bold" style={{ color: INK }}>
+                “명찰의 걸음수만큼, 시계방향으로 옮겨 주세요.”
+              </p>
+              <p className="mt-2 text-xs" style={{ color: MUTED }}>
+                걸음수는 1·2·3·5·6·7 여섯 종류입니다. 4는 세 번째에 제자리로 돌아와서 뺐습니다.
+                모든 참가자가 <b>도구 맛 최소 1개</b>와 <b>예산·네트워킹 맛 최소 1개</b>를 담도록 자리 순서를 짰습니다.
+              </p>
+            </div>
+
+            <div>
+              <h2 className="mb-2 text-base font-black" style={{ color: INK }}>등록 데스크 분담</h2>
+              <div className="flex flex-wrap gap-2">
+                {deskRanges.map((d) => (
+                  <div key={d.no} className="rounded-xl px-4 py-3" style={{ background: "#F7F1E6" }}>
+                    <div className="text-xs font-bold" style={{ color: MUTED }}>{d.no}번 데스크</div>
+                    <div className="text-lg font-black tabular-nums" style={{ color: INK }}>{d.from} – {d.to}</div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-xs" style={{ color: FAINT }}>
+                명찰을 번호순으로 인쇄해 데스크별 트레이에 나눠 두면 1인 30초 안에 처리됩니다.
+              </p>
+            </div>
+          </section>
+        )}
+
+        <footer className="mt-10 pt-4 text-xs" style={{ borderTop: `1px solid ${RULE}`, color: "#B0A091" }}>
+          배정이 번호에서 계산되므로 인터넷이 끊겨도 명찰과 인쇄된 표만 있으면 그대로 운영됩니다.
+        </footer>
+      </div>
+    </div>
+  );
+}
