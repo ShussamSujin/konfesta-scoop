@@ -724,10 +724,11 @@ function playDrumroll(durMs) {
 }
 
 function DrawBoard({ active }) {
-  const draws = usePolled("draws", 5000, active, {});
+  const polled = usePolled("draws", 5000, active, {});
+  const [snapshot, setSnapshot] = useState(null); // 공개 시점에 직접 받아온 최신 명단
   const [pendingId, setPendingId] = useState(null);
-  const [, bump] = useState(0);
-  const mountAt = useRef(Date.now());
+
+  const draws = useMemo(() => ({ ...(polled || {}), ...(snapshot || {}) }), [polled, snapshot]);
 
   useEffect(() => {
     const entries = Object.entries(draws || {});
@@ -743,10 +744,12 @@ function DrawBoard({ active }) {
     const [id] = fresh[fresh.length - 1];
     setPendingId(id);
     playDrumroll(REVEAL_MS);
-    setTimeout(() => {
+    setTimeout(async () => {
+      // 공개 직전에 명단을 직접 가져와 폴링 상태와 무관하게 공개를 보장
+      try { const d = await dbGet("draws"); if (d) setSnapshot(d); } catch (e) {}
       fresh.forEach(([fid]) => REVEALED_DRAWS.add(fid));
+      REVEALED_DRAWS.add(id);
       setPendingId(null);
-      bump((x) => x + 1);
     }, REVEAL_MS);
   }, [draws, pendingId]);
 
