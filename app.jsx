@@ -19,6 +19,7 @@ const EVENTS = {
     hosts: ["임슬기", "임슬기", "김송희", "김태연", "박준열", "이희수", "김두일", "김채은"],
     purpleTables: 3,
     dangHost: "이수진",
+    tierDefault: "1등 기계식 키보드,20\n2등 노트북 파우치,20\n3등 보조배터리,20\n4등 베라 트리플 주니어,138",
   },
   el: {
     badge: "2026학년도 AI·디지털 활용 선도학교(초등) 공유회 · C구역",
@@ -29,6 +30,7 @@ const EVENTS = {
     hosts: ["정준용", "정준용", "김여미", "홍성용", "김경상", "백인규", "김승현", "이소영"],
     purpleTables: 2,
     dangHost: "천석경",
+    tierDefault: "1등 기계식 키보드,18\n2등 노트북 파우치,18\n3등 보조배터리,18\n4등 베라 트리플 주니어,128",
   },
 };
 const EVID = window.__EVENT_ID || "mid";
@@ -617,7 +619,7 @@ function Admin({ active }) {
   const [schools, setSchools] = useState("");
   const [baseCap, setBaseCap] = useState(20);
   const [maxCap, setMaxCap] = useState(25);
-  const [tierText, setTierText] = useState("1등 기계식 키보드,20\n2등 노트북 파우치,20\n3등 보조배터리,20\n4등 베라 트리플 주니어,138");
+  const [tierText, setTierText] = useState(EV.tierDefault);
   const [msg, setMsg] = useState("");
   const loaded = useRef(false);
   useEffect(() => {
