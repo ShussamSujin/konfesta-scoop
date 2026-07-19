@@ -685,41 +685,76 @@ function playDrumroll(durMs) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
-    const master = ctx.createGain(); master.gain.value = 0.55; master.connect(ctx.destination);
-    // 스네어 노이즈 한 타
-    const len = Math.floor(ctx.sampleRate * 0.08);
-    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
+    // 마스터: 부드러운 로우패스로 거친 고음을 걷어내 귀에 편하게
+    const master = ctx.createGain(); master.gain.value = 0.45;
+    const soft = ctx.createBiquadFilter(); soft.type = "lowpass"; soft.frequency.value = 7500;
+    soft.connect(master); master.connect(ctx.destination);
+
+    // 청량한 틱 한 타 = 밴드패스 노이즈(맑은 스틱 소리) + 아주 짧은 핑
+    const nlen = Math.floor(ctx.sampleRate * 0.05);
+    const nbuf = ctx.createBuffer(1, nlen, ctx.sampleRate);
+    const nd = nbuf.getChannelData(0);
+    for (let i = 0; i < nlen; i++) nd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / nlen, 2.5);
+    const hit = (t, vol, bright) => {
+      const src = ctx.createBufferSource(); src.buffer = nbuf;
+      const bp = ctx.createBiquadFilter(); bp.type = "bandpass";
+      bp.frequency.value = 1600 + 900 * bright; bp.Q.value = 1.4;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+      src.connect(bp); bp.connect(g); g.connect(soft);
+      src.start(t);
+      const o = ctx.createOscillator(); o.type = "sine";
+      o.frequency.value = 2100 + 500 * bright;
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(vol * 0.3, t);
+      og.gain.exponentialRampToValueAtTime(0.001, t + 0.045);
+      o.connect(og); og.connect(soft); o.start(t); o.stop(t + 0.05);
+    };
     const t0 = ctx.currentTime + 0.05;
     const total = durMs / 1000;
     let t = 0;
     while (t < total) {
       const prog = t / total;
-      const src = ctx.createBufferSource(); src.buffer = buf;
-      const g = ctx.createGain(); g.gain.value = 0.12 + 0.55 * prog; // 점점 크게
-      src.connect(g); g.connect(master);
-      src.start(t0 + t);
-      t += Math.max(0.045, 0.17 - 0.125 * prog); // 점점 빠르게
+      hit(t0 + t, 0.1 + 0.4 * prog, prog); // 점점 크고 밝게
+      t += Math.max(0.05, 0.18 - 0.13 * prog); // 점점 빠르게
     }
+
+    /* ── 팡파레 (~3.5초): 아르페지오 → 지속 화음 → 반짝이는 심벌 ── */
     const end = t0 + total;
-    // 팡파레: 심벌 + 밝은 화음
-    const clen = Math.floor(ctx.sampleRate * 1.2);
+    const tone = (freq, start, peak, dur, type) => {
+      const o = ctx.createOscillator(); o.type = type || "triangle"; o.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.001, start);
+      g.gain.exponentialRampToValueAtTime(peak, start + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.001, start + dur);
+      o.connect(g); g.connect(soft); o.start(start); o.stop(start + dur + 0.05);
+    };
+    // 상승 아르페지오 (도-미-솔-도)
+    [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+      tone(f, end + i * 0.16, 0.22, 0.55, "triangle");
+    });
+    // 지속 화음 (살짝 디튠한 두 겹으로 풍성하게, ~2.8초)
+    const chordAt = end + 0.64;
+    [523.25, 659.25, 783.99, 1046.5].forEach((f) => {
+      [-4, 4].forEach((cents) => {
+        tone(f * Math.pow(2, cents / 1200), chordAt, 0.11, 2.8, "sine");
+      });
+    });
+    tone(261.63, chordAt, 0.14, 2.8, "triangle"); // 낮은 도로 바닥을 받침
+    // 반짝이는 심벌: 하이패스 노이즈 롱테일
+    const clen = Math.floor(ctx.sampleRate * 2.2);
     const cbuf = ctx.createBuffer(1, clen, ctx.sampleRate);
     const cd = cbuf.getChannelData(0);
-    for (let i = 0; i < clen; i++) cd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clen, 1.6);
+    for (let i = 0; i < clen; i++) cd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clen, 2.2);
     const crash = ctx.createBufferSource(); crash.buffer = cbuf;
+    const hp = ctx.createBiquadFilter(); hp.type = "highpass"; hp.frequency.value = 5000;
     const cg = ctx.createGain();
-    cg.gain.setValueAtTime(0.55, end); cg.gain.exponentialRampToValueAtTime(0.01, end + 1.1);
-    crash.connect(cg); cg.connect(master); crash.start(end);
-    [523.25, 659.25, 783.99, 1046.5].forEach((f) => {
-      const o = ctx.createOscillator(); o.type = "triangle"; o.frequency.value = f;
-      const og = ctx.createGain();
-      og.gain.setValueAtTime(0.001, end); og.gain.exponentialRampToValueAtTime(0.22, end + 0.03);
-      og.gain.exponentialRampToValueAtTime(0.01, end + 1.5);
-      o.connect(og); og.connect(master); o.start(end); o.stop(end + 1.6);
-    });
-    setTimeout(() => { try { ctx.close(); } catch (e) {} }, durMs + 2600);
+    cg.gain.setValueAtTime(0.25, chordAt);
+    cg.gain.exponentialRampToValueAtTime(0.001, chordAt + 2.1);
+    crash.connect(hp); hp.connect(cg); cg.connect(soft); crash.start(chordAt);
+
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, durMs + 4500);
   } catch (e) { /* 소리가 막혀도 화면 연출은 계속 */ }
 }
 
