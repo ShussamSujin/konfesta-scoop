@@ -154,15 +154,18 @@ function tally(regs) {
    ② 예산 스쿱 정확히 1개 — 등록 시 고른 예산 규모대로
       (1,000만원 이내 → 1번 빨강·주황 / 초과 → 2번 노랑)
    ③ 보고서 스쿱 1개 이상
-   ④ 라운드별로 덜 찬 맛부터 채워 정원 내 분산 */
-function autoStops(first, scale, counts) {
+   ④ 모든 라운드에 정원 상한 적용 — 정원 미만인 자리 중
+      인원이 가장 적은 곳부터 채워 어느 한쪽도 넘치지 않게 분산 */
+function autoStops(first, scale, counts, cap) {
   const bf = scaleFlavor(scale);
+  // 정원 미만인 후보 우선, 그 안에서 인원 적은 순 (전부 찼을 때만 최소 인원으로 초과 허용)
   const pick = (round, used, pool) => {
     const cands = pool.filter((f) => !used.includes(f));
-    cands.sort((a, b) => (counts[round][a] - counts[round][b]) || (a - b));
-    return cands[0];
+    const under = cands.filter((f) => counts[round][f] < cap);
+    const use = under.length ? under : cands;
+    use.sort((a, b) => (counts[round][a] - counts[round][b]) || (a - b));
+    return use[0];
   };
-  const loadOf = (p) => counts[1][p[1]] + counts[2][p[2]];
   if (BUDGET.includes(first)) {
     // 시작이 예산(= 고른 규모) → 나머지는 보고서 1개 보장 + 보고서/네트워킹
     const s2 = pick(1, [first], REPORT);
@@ -170,12 +173,19 @@ function autoStops(first, scale, counts) {
     return [first, s2, s3];
   }
   // 시작이 보고서/네트워킹 → 남은 두 자리 = 예산(규모 맛) 1개 + 나머지 1개
+  // 예산 스쿱은 2·3라운드 중 정원이 남고 덜 찬 라운드에 배치
   const otherPool = REPORT.includes(first) ? NONBUDGET : REPORT; // 보라로 시작하면 보고서 필수
-  const oA = pick(2, [first, bf], otherPool);
-  const planA = [first, bf, oA];
-  const oB = pick(1, [first], otherPool);
-  const planB = [first, oB, bf];
-  return loadOf(planB) < loadOf(planA) ? planB : planA;
+  const r2n = counts[1][bf], r3n = counts[2][bf];
+  const r2ok = r2n < cap, r3ok = r3n < cap;
+  let bRound;
+  if (r2ok && !r3ok) bRound = 1;
+  else if (!r2ok && r3ok) bRound = 2;
+  else bRound = r2n <= r3n ? 1 : 2;
+  const oRound = bRound === 1 ? 2 : 1;
+  const other = pick(oRound, [first, bf], otherPool);
+  const stops = [first, 0, 0];
+  stops[bRound] = bf; stops[oRound] = other;
+  return stops;
 }
 
 function regsToList(regsObj) {
@@ -292,6 +302,9 @@ function Register({ settings, onDone }) {
     return state.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0));
   }, [state]);
   const cap = capacityFor(counts, settings);
+  // 예산 규모별 총 정원 = 라운드당 정원 × 3라운드 (예산 부스는 매 라운드 그 규모 사람들만 받으므로)
+  const sc = (state && state.sc) || {};
+  const scaleLeft = (key) => Math.max(0, 3 * cap - (sc[key] || 0));
   const schools = useMemo(
     () => String((settings && settings.schools) || "").split("\n").map((s) => s.trim()).filter(Boolean),
     [settings]
@@ -324,10 +337,19 @@ function Register({ settings, onDone }) {
           setErr("방금 그 주제가 마감되었습니다. 다른 주제를 골라 주세요.");
           setBusy(false); setColor(null); return;
         }
-        const stops = autoStops(color, scale, c);
+        const scNow = {
+          low: ((st && st.sc && st.sc.low) || 0),
+          high: ((st && st.sc && st.sc.high) || 0),
+        };
+        if (scNow[scale] >= 3 * capNow) {
+          setErr("해당 예산 규모가 마감되었습니다. 운영진에게 문의해 주세요.");
+          setBusy(false); setScale(null); return;
+        }
+        const stops = autoStops(color, scale, c, capNow);
         stops.forEach((f, i) => { c[i][f] += 1; });
+        scNow[scale] += 1;
         const seq = ((st && st.seq) || 0) + 1;
-        const status = await dbPutIfMatch("state", etag, { seq, counts: c });
+        const status = await dbPutIfMatch("state", etag, { seq, counts: c, sc: scNow });
         if (status === 200) assigned = { stops, seq };
         else if (status === 412) await new Promise((r) => setTimeout(r, 150 + Math.random() * 400));
         else throw new Error("save " + status);
@@ -346,16 +368,20 @@ function Register({ settings, onDone }) {
 
   const scaleBtn = (key, label, sub) => {
     const on = scale === key;
+    const left = scaleLeft(key);
+    const closed = left === 0;
     return (
-      <button onClick={() => pickScale(key)}
+      <button onClick={() => pickScale(key)} disabled={closed}
         className="flex-1 px-4 py-3 text-left transition-transform active:scale-95"
         style={{
-          background: on ? CORAL : "#FFF9F1", borderRadius: 20,
-          border: on ? `2.5px solid ${CORAL}` : `2px solid ${LINE_SOFT}`,
-          boxShadow: on ? SHADOW : "none",
+          background: on ? CORAL : closed ? "#F4ECE2" : "#FFF9F1", borderRadius: 20,
+          border: on ? `2.5px solid ${CORAL}` : `2px solid ${closed ? "#E8DCCE" : LINE_SOFT}`,
+          boxShadow: on ? SHADOW : "none", opacity: closed ? 0.55 : 1,
         }}>
         <span className="block text-sm font-extrabold" style={{ color: on ? "#fff" : INK }}>{label}</span>
-        <span className="block text-[11px] font-bold" style={{ color: on ? "rgba(255,255,255,.85)" : FAINT }}>{sub}</span>
+        <span className="block text-[11px] font-bold" style={{ color: on ? "rgba(255,255,255,.85)" : FAINT }}>
+          {sub} · {closed ? "마감" : `남은 자리 ${left}`}
+        </span>
       </button>
     );
   };
