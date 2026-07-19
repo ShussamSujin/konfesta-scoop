@@ -675,10 +675,108 @@ function Roster({ active }) {
   );
 }
 
-/* ── 럭키드로우 결과 — 8초 폴링 ── */
+/* ── 럭키드로우 연출 ──
+   새 추첨이 올라오면 12초간 두구두구 드럼롤(Web Audio 합성)로 긴장감을
+   끌어올린 뒤 팡파레와 함께 명단을 공개한다. 이미 공개된 추첨은 바로 표시. */
+const REVEAL_MS = 12000;
+const REVEALED_DRAWS = new Set(); // 이 세션에서 연출을 마친 추첨 id
+
+function playDrumroll(durMs) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const master = ctx.createGain(); master.gain.value = 0.55; master.connect(ctx.destination);
+    // 스네어 노이즈 한 타
+    const len = Math.floor(ctx.sampleRate * 0.08);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
+    const t0 = ctx.currentTime + 0.05;
+    const total = durMs / 1000;
+    let t = 0;
+    while (t < total) {
+      const prog = t / total;
+      const src = ctx.createBufferSource(); src.buffer = buf;
+      const g = ctx.createGain(); g.gain.value = 0.12 + 0.55 * prog; // 점점 크게
+      src.connect(g); g.connect(master);
+      src.start(t0 + t);
+      t += Math.max(0.045, 0.17 - 0.125 * prog); // 점점 빠르게
+    }
+    const end = t0 + total;
+    // 팡파레: 심벌 + 밝은 화음
+    const clen = Math.floor(ctx.sampleRate * 1.2);
+    const cbuf = ctx.createBuffer(1, clen, ctx.sampleRate);
+    const cd = cbuf.getChannelData(0);
+    for (let i = 0; i < clen; i++) cd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / clen, 1.6);
+    const crash = ctx.createBufferSource(); crash.buffer = cbuf;
+    const cg = ctx.createGain();
+    cg.gain.setValueAtTime(0.55, end); cg.gain.exponentialRampToValueAtTime(0.01, end + 1.1);
+    crash.connect(cg); cg.connect(master); crash.start(end);
+    [523.25, 659.25, 783.99, 1046.5].forEach((f) => {
+      const o = ctx.createOscillator(); o.type = "triangle"; o.frequency.value = f;
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.001, end); og.gain.exponentialRampToValueAtTime(0.22, end + 0.03);
+      og.gain.exponentialRampToValueAtTime(0.01, end + 1.5);
+      o.connect(og); og.connect(master); o.start(end); o.stop(end + 1.6);
+    });
+    setTimeout(() => { try { ctx.close(); } catch (e) {} }, durMs + 2600);
+  } catch (e) { /* 소리가 막혀도 화면 연출은 계속 */ }
+}
+
 function DrawBoard({ active }) {
-  const draws = usePolled("draws", 8000, active, {});
-  const rounds = Object.entries(draws || {}).sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
+  const draws = usePolled("draws", 5000, active, {});
+  const [pendingId, setPendingId] = useState(null);
+  const [, bump] = useState(0);
+  const mountAt = useRef(Date.now());
+
+  useEffect(() => {
+    const entries = Object.entries(draws || {});
+    if (!entries.length) return;
+    const now = Date.now();
+    // 갓 실행된(90초 이내) 미공개 추첨만 연출 대상, 오래된 건 바로 공개 처리
+    entries.forEach(([id, d]) => {
+      if (!REVEALED_DRAWS.has(id) && !(d.ts && now - d.ts < 90000)) REVEALED_DRAWS.add(id);
+    });
+    if (pendingId) return;
+    const fresh = entries.filter(([id]) => !REVEALED_DRAWS.has(id));
+    if (!fresh.length) return;
+    const [id] = fresh[fresh.length - 1];
+    setPendingId(id);
+    playDrumroll(REVEAL_MS);
+    setTimeout(() => {
+      fresh.forEach(([fid]) => REVEALED_DRAWS.add(fid));
+      setPendingId(null);
+      bump((x) => x + 1);
+    }, REVEAL_MS);
+  }, [draws, pendingId]);
+
+  const rounds = Object.entries(draws || {})
+    .filter(([id]) => REVEALED_DRAWS.has(id))
+    .sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0)); // 최신 추첨을 위로
+
+  if (pendingId) {
+    return (
+      <section className="mx-auto max-w-lg">
+        <style>{`
+          @keyframes drumshake { 0%,100%{transform:rotate(-6deg) scale(1)} 25%{transform:rotate(6deg) scale(1.08)} 50%{transform:rotate(-5deg) scale(1.02)} 75%{transform:rotate(5deg) scale(1.1)} }
+          @keyframes tenseblink { 0%,100%{opacity:1} 50%{opacity:.45} }
+        `}</style>
+        <div className="p-10 text-center" style={card({ border: `3px solid ${CORAL}` })}>
+          <div className="text-7xl" style={{ animation: "drumshake .28s infinite" }}>🥁</div>
+          <h2 className="mt-5 text-2xl font-black tracking-widest" style={{ color: CORAL, animation: "tenseblink 1s infinite" }}>
+            두구두구두구…
+          </h2>
+          <p className="mt-3 text-sm font-extrabold" style={{ color: MUTED }}>
+            행운의 주인공을 뽑고 있어요!
+          </p>
+          <p className="mt-1.5 text-xs font-bold" style={{ color: FAINT }}>
+            잠시 후 당첨자 명단이 공개됩니다 🍀
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   if (!rounds.length) {
     return <p className="mx-auto max-w-lg px-4 py-12 text-center text-sm font-bold" style={{ background: CHIP, color: FAINT, borderRadius: 24 }}>
       아직 추첨 전이에요. 3스쿱을 모으면 자동으로 응모됩니다. 🍀
@@ -686,8 +784,11 @@ function DrawBoard({ active }) {
   }
   return (
     <section className="mx-auto max-w-3xl space-y-5">
-      {rounds.map(([id, d]) => (
-        <div key={id} className="p-5" style={card()}>
+      <style>{`
+        @keyframes chippop { 0%{transform:scale(0);opacity:0} 70%{transform:scale(1.15)} 100%{transform:scale(1);opacity:1} }
+      `}</style>
+      {rounds.map(([id, d], di) => (
+        <div key={id} className="p-5" style={card(di === 0 ? { border: `3px solid ${CORAL}` } : {})}>
           <h2 className="text-base font-black" style={{ color: CORAL }}>🎉 {d.label || "럭키 드로우"}</h2>
           {(d.tiers || []).map((t, ti) => (
             <div key={ti} className="mt-3.5">
@@ -695,7 +796,10 @@ function DrawBoard({ active }) {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {(t.winners || []).map((w, wi) => (
                   <span key={wi} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold"
-                    style={{ background: CHIP, border: `2px solid ${LINE_SOFT}`, borderRadius: 999, color: INK }}>
+                    style={{
+                      background: CHIP, border: `2px solid ${LINE_SOFT}`, borderRadius: 999, color: INK,
+                      animation: di === 0 ? `chippop .45s ${(ti * 0.5 + wi * 0.06).toFixed(2)}s both` : "none",
+                    }}>
                     <span className="h-3 w-3 rounded-full" style={{ ...dotBg(FLAVORS[w.table]), border: `1.5px solid ${CORAL}` }} />
                     {w.seq}번 {w.name} {w.school ? <span style={{ color: FAINT }}>· {w.school}</span> : null}
                   </span>
@@ -803,7 +907,7 @@ function Admin({ active }) {
       label: `추첨 ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`,
       tiers: result, ts: { ".sv": "timestamp" },
     });
-    note("추첨 완료. ‘럭키드로우’ 탭에 결과가 공개되었습니다.");
+    note("추첨 완료! ‘럭키드로우’ 탭으로 이동하면 두구두구 연출 후 명단이 공개됩니다. 🥁");
   }
 
   function dlCsv(rows, filename) {
@@ -902,7 +1006,8 @@ function Admin({ active }) {
         <h2 className="text-base font-black" style={{ color: CORAL }}>럭키 드로우</h2>
         <p className="mt-1.5 text-xs leading-relaxed" style={{ color: MUTED }}>
           등록자 전체(기존 당첨자 제외)를 대상으로 일괄 추첨하고, 당첨자를 3스쿱 테이블별로 고르게 배당합니다.
-          재추첨하면 이전 당첨자는 자동 제외돼요. 미당첨 등록자 {regs.length - prevWinnerIds.size}명.
+          실행하면 럭키드로우 탭에서 <b>12초 두구두구 드럼롤 연출 후</b> 명단이 공개돼요 (메인 스크린은 미리 럭키드로우 탭을 띄워 두세요).
+          재추첨하면 이전 당첨자는 자동 제외됩니다. 미당첨 등록자 {regs.length - prevWinnerIds.size}명.
         </p>
         <button onClick={runDraw} className="mt-3.5 px-5 py-2.5 text-sm font-black text-white"
           style={{ background: "#A07FD0", borderRadius: 999, boxShadow: "0 10px 24px rgba(160,127,208,.25)" }}>
