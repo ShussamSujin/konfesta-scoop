@@ -1,35 +1,94 @@
 /* ─────────────────────────────────────────────────────────────
    디선 31 · 골라 담는 운영 꿀팁 3스쿱 — 자리 배정 앱
    선착순 셀프 등록 · 1스쿱은 선택, 2·3스쿱은 자동 · 자리 고정
-   데이터는 Firebase Realtime Database 하나를 전원이 공유한다.
+
+   데이터: Firebase RTDB REST (상시 연결 없음 → 무료 요금제의
+   동시 연결 100개 제한과 무관, 400명 동시 접속 안전)
    ───────────────────────────────────────────────────────────── */
 
 const { useState, useEffect, useMemo, useRef } = React;
 
-/* ── Firebase ── */
-const firebaseConfig = window.__FIREBASE_CONFIG;
-firebase.initializeApp(firebaseConfig);
-const db = firebase.database();
-const ROOT = "konfesta31"; // 이 행사 데이터가 모이는 경로
+/* ── REST 데이터 계층 ── */
+const DB = "https://dobble-game-by-sujin-default-rtdb.asia-southeast1.firebasedatabase.app/konfesta31";
 
-/* ── 맛 데이터 (문서 1장 고정) ── */
+async function dbGet(path) {
+  const r = await fetch(`${DB}/${path}.json`);
+  if (!r.ok) throw new Error("read " + r.status);
+  return r.json();
+}
+async function dbGetEtag(path) {
+  const r = await fetch(`${DB}/${path}.json`, { headers: { "X-Firebase-ETag": "true" } });
+  if (!r.ok) throw new Error("read " + r.status);
+  return { etag: r.headers.get("ETag"), data: await r.json() };
+}
+async function dbPutIfMatch(path, etag, data) {
+  const r = await fetch(`${DB}/${path}.json`, {
+    method: "PUT", headers: { "if-match": etag }, body: JSON.stringify(data),
+  });
+  return r.status; // 200 성공, 412 충돌
+}
+async function dbPush(path, data) {
+  const r = await fetch(`${DB}/${path}.json`, { method: "POST", body: JSON.stringify(data) });
+  if (!r.ok) throw new Error("push " + r.status);
+  return (await r.json()).name;
+}
+async function dbPatch(path, data) {
+  const r = await fetch(`${DB}/${path}.json`, { method: "PATCH", body: JSON.stringify(data) });
+  if (!r.ok) throw new Error("patch " + r.status);
+}
+async function dbDelete(path) {
+  await fetch(`${DB}/${path}.json`, { method: "DELETE" });
+}
+
+/* 주기적 폴링 (화면이 보일 때만) — 상시 연결 대신 쓰는 실시간 대용 */
+function usePolled(path, ms, enabled, fallback) {
+  const [val, setVal] = useState(fallback);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true, timer = null;
+    const tick = async () => {
+      if (document.visibilityState === "visible") {
+        try { const v = await dbGet(path); if (alive) setVal(v === null ? fallback : v); } catch {}
+      }
+      if (alive) timer = setTimeout(tick, ms);
+    };
+    tick();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [path, ms, enabled]);
+  return val;
+}
+
+/* ── 맛 데이터 (운영계획서 1장 고정) ── */
 const FLAVORS = [
-  { color: "#D93A3A", cname: "빨강",   name: "알뜰 딸기 스무디", host: "임슬기", topic: "소액 예산 (1,000만원 이내)", zone: "예산", tables: 2 },
-  { color: "#F08A24", cname: "주황",   name: "새콤 망고 탱고",   host: "임슬기", topic: "중간 예산 (1,000~3,000만원대)", zone: "예산", tables: 2 },
-  { color: "#EFBE2A", cname: "노랑",   name: "화끈 파인 번개",   host: "김송희", topic: "대규모 예산", zone: "예산", tables: 2 },
-  { color: "#3FA45B", cname: "초록",   name: "멜론 소다",       host: "김태연", topic: "Gemini · 교학공 운영", zone: "보고서", tables: 2 },
-  { color: "#4FB6E8", cname: "하늘",   name: "블루 하와이",     host: "박준열", topic: "ChatGPT · 사전·사후 조사", zone: "보고서", tables: 2 },
-  { color: "#2E3D6B", cname: "남색",   name: "미드나잇 소르베", host: "이희수", topic: "Claude · 성과공유 보고회", zone: "보고서", tables: 2 },
-  { color: "#45BFAE", cname: "민트",   name: "시원 소다",       host: "김두일", topic: "senGPT · 성과보고서", zone: "보고서", tables: 2 },
-  { color: "#7A4C9E", cname: "보라",   name: "포도 알알이",     host: "김채은", topic: "네트워킹 · 성과 총정리", zone: "네트워킹&성과", tables: 3 },
+  { color: "#F26D6D", cname: "빨강",   name: "알뜰 딸기 스무디", host: "임슬기", topic: "소액 예산 (1,000만원 이내)", zone: "예산", tables: 2 },
+  { color: "#F79A57", cname: "주황",   name: "새콤 망고 탱고",   host: "임슬기", topic: "중간 예산 (1,000~3,000만원대)", zone: "예산", tables: 2 },
+  { color: "#F5C445", cname: "노랑",   name: "화끈 파인 번개",   host: "김송희", topic: "대규모 예산", zone: "예산", tables: 2 },
+  { color: "#7CC98E", cname: "초록",   name: "멜론 소다",       host: "김태연", topic: "Gemini · 교학공 운영", zone: "보고서", tables: 2 },
+  { color: "#7CC5EE", cname: "하늘",   name: "블루 하와이",     host: "박준열", topic: "ChatGPT · 사전·사후 조사", zone: "보고서", tables: 2 },
+  { color: "#5D6FA8", cname: "남색",   name: "미드나잇 소르베", host: "이희수", topic: "Claude · 성과공유 보고회", zone: "보고서", tables: 2 },
+  { color: "#6ED3C2", cname: "민트",   name: "시원 소다",       host: "김두일", topic: "senGPT · 성과보고서", zone: "보고서", tables: 2 },
+  { color: "#A07FD0", cname: "보라",   name: "포도 알알이",     host: "김채은", topic: "네트워킹 · 성과 총정리", zone: "네트워킹&성과", tables: 3 },
 ];
-const DANG = { color: "#9B85C4", cname: "연보라", name: "라벤더 허니", host: "이수진", topic: "용한 디선당 · FAQ 상담 (상시 오픈)" };
-const REPORT = [3, 4, 5, 6]; // 보고서 스쿱
+const DANG = { color: "#C6ADE8", cname: "연보라", name: "라벤더 허니", host: "이수진", topic: "용한 디선당 · FAQ 상담 (상시 오픈)" };
+const REPORT = [3, 4, 5, 6];
 
-const INK = "#3A2A24", PAPER = "#FFFDF7", RULE = "#E6DCCB", MUTED = "#7A6A5E", FAINT = "#A9998B";
-const CREAM = "#F7F1E6";
+/* ── 파스텔 캔디 디자인 토큰 ── */
+const BG = "#FFF7EC";          // 따뜻한 크림 배경
+const CARD = "#FFFFFF";
+const CORAL = "#F0776B";       // 메인 코랄
+const LINE = "#F6B39B";        // 두꺼운 코랄 아웃라인
+const LINE_SOFT = "#FBDCC8";   // 연한 구분선
+const INK = "#4A3B34";         // 웜 브라운 잉크
+const MUTED = "#8A776C";
+const FAINT = "#B5A296";
+const CHIP = "#FFF1E2";        // 파스텔 칩 배경
+const DANGER = "#E2574C";
+const OK_BG = "#E9F7E9", OK_FG = "#3E7C4B";
+const SHADOW = "0 10px 24px rgba(240,119,107,.14)";
+const card = (extra) => ({ background: CARD, border: `2.5px solid ${LINE}`, borderRadius: 28, boxShadow: SHADOW, ...extra });
+const input = { background: "#FFF9F1", border: `2px solid ${LINE_SOFT}`, borderRadius: 18, color: INK };
 
-/* 정원: 기본 20 → 8색 모두 마감이면 +2 자동 상향, 상한 25 (문서 2-4) */
+/* 정원: 기본 20 → 8색 모두 마감이면 +2 자동 상향, 상한 25 */
 function capacityFor(counts, settings) {
   const base = (settings && settings.baseCap) || 20;
   const max = (settings && settings.maxCap) || 25;
@@ -38,15 +97,13 @@ function capacityFor(counts, settings) {
   return cap;
 }
 
-/* 라운드별 인원 집계: counts[round][flavor] */
 function tally(regs) {
   const c = [Array(8).fill(0), Array(8).fill(0), Array(8).fill(0)];
   regs.forEach((r) => r.stops.forEach((f, i) => { c[i][f] += 1; }));
   return c;
 }
 
-/* 2·3스쿱 자동 배정 (문서 7장 배정 규칙)
-   ① 같은 맛 중복 없음 ② 보고서 스쿱 1개 이상 ③ 라운드별로 덜 찬 맛부터 */
+/* 2·3스쿱 자동 배정: 같은 맛 중복 없음 · 보고서 스쿱 필수 · 라운드 균형 */
 function autoStops(first, counts) {
   const isReport = REPORT.includes(first);
   const pick = (round, used, pool) => {
@@ -60,7 +117,6 @@ function autoStops(first, counts) {
     const s3 = pick(2, [first, s2], all);
     return [first, s2, s3];
   }
-  // 보고서가 아직 없으면: 두 후보 조합 중 균형이 나은 쪽에 보고서를 넣는다
   const r2 = pick(1, [first], REPORT);
   const o3 = pick(2, [first, r2], all);
   const planA = [first, r2, o3];
@@ -71,18 +127,6 @@ function autoStops(first, counts) {
   return loadOf(planB) < loadOf(planA) ? planB : planA;
 }
 
-/* ── 공유 데이터 훅 ── */
-function useShared(path, fallback) {
-  const [val, setVal] = useState(fallback);
-  useEffect(() => {
-    const ref = db.ref(`${ROOT}/${path}`);
-    const cb = ref.on("value", (snap) => setVal(snap.val() === null ? fallback : snap.val()),
-      () => setVal(fallback));
-    return () => ref.off("value", cb);
-  }, [path]);
-  return val;
-}
-
 function regsToList(regsObj) {
   return Object.entries(regsObj || {})
     .map(([id, r]) => ({ id, ...r }))
@@ -90,23 +134,38 @@ function regsToList(regsObj) {
     .sort((a, b) => a.seq - b.seq);
 }
 
-/* ── 콘 카드 ── */
+/* ── 배경 블롭 장식 ── */
+function Blobs() {
+  return (
+    <svg className="pointer-events-none fixed inset-0 -z-10 h-full w-full" preserveAspectRatio="none" aria-hidden="true">
+      <ellipse cx="8%" cy="10%" rx="180" ry="140" fill="#FDE4D5" opacity="0.6" />
+      <ellipse cx="94%" cy="18%" rx="160" ry="130" fill="#FBEBD2" opacity="0.7" />
+      <ellipse cx="90%" cy="88%" rx="200" ry="150" fill="#F9E0E8" opacity="0.5" />
+      <ellipse cx="6%" cy="92%" rx="170" ry="130" fill="#E8F1E2" opacity="0.6" />
+    </svg>
+  );
+}
+
+/* ── 콘 카드 (캔디 광택) ── */
 function Cone({ stops, size = 1 }) {
   return (
-    <svg viewBox="0 0 150 210" width={150 * size} height={210 * size} role="img" aria-label="3스쿱 콘">
+    <svg viewBox="0 0 150 214" width={150 * size} height={214 * size} role="img" aria-label="3스쿱 콘">
       <defs>
-        <pattern id="wf" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-          <rect width="9" height="9" fill="#D9A566" />
-          <path d="M0 0H9M0 0V9" stroke="#B9803F" strokeWidth="1.2" />
+        <pattern id="wf" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="10" height="10" fill="#F3C489" />
+          <path d="M0 0H10M0 0V10" stroke="#E0A05E" strokeWidth="1.4" />
         </pattern>
       </defs>
-      <polygon points="46,124 104,124 75,200" fill="url(#wf)" stroke="#B9803F" strokeWidth="2" />
+      <polygon points="45,126 105,126 75,202" fill="url(#wf)" stroke={CORAL} strokeWidth="3" strokeLinejoin="round" />
       {[2, 1, 0].map((i) => {
-        const cy = [118, 84, 52][i], r = [35, 33, 30][i];
+        const cy = [120, 85, 52][i], r = [36, 34, 31][i];
         return (
           <g key={i}>
-            <circle cx="75" cy={cy} r={r} fill={FLAVORS[stops[i]].color} stroke="rgba(0,0,0,.18)" strokeWidth="2" />
-            <text x="75" y={cy + 7} textAnchor="middle" fontSize="20" fontWeight="900" fill="#fff">{i + 1}</text>
+            <circle cx="75" cy={cy} r={r} fill={FLAVORS[stops[i]].color} stroke={CORAL} strokeWidth="3" />
+            <ellipse cx={75 - r * 0.38} cy={cy - r * 0.42} rx={r * 0.3} ry={r * 0.18}
+              fill="#fff" opacity="0.5" transform={`rotate(-24 ${75 - r * 0.38} ${cy - r * 0.42})`} />
+            <text x="75" y={cy + 7} textAnchor="middle" fontSize="20" fontWeight="900" fill="#fff"
+              stroke="rgba(0,0,0,.12)" strokeWidth="0.6">{i + 1}</text>
           </g>
         );
       })}
@@ -115,97 +174,97 @@ function Cone({ stops, size = 1 }) {
 }
 
 /* ── 원형 배치도 (자리 1~8 + 디선당) ── */
-function Ring({ stops, size = 260 }) {
-  const C = 150, R = 105;
+function Ring({ stops, size = 250 }) {
+  const C = 150, R = 104;
   const pt = (p) => {
     const a = (p / 9) * 2 * Math.PI - Math.PI / 2;
     return [C + R * Math.cos(a), C + R * Math.sin(a)];
   };
   return (
     <svg viewBox="0 0 300 300" width={size} height={size} role="img" aria-label="자리 배치도">
-      <circle cx={C} cy={C} r={R} fill="none" stroke={RULE} strokeWidth="2" strokeDasharray="4 6" />
+      <circle cx={C} cy={C} r={R} fill="none" stroke={LINE} strokeWidth="3" strokeDasharray="2 10" strokeLinecap="round" />
       {FLAVORS.map((f, fi) => {
         const [x, y] = pt(fi);
         const order = stops ? stops.indexOf(fi) : -1;
         const on = order > -1;
+        const r = on ? 25 : 17;
         return (
-          <g key={fi}>
-            <circle cx={x} cy={y} r={on ? 24 : 16} fill={f.color}
-              stroke={on ? INK : "rgba(0,0,0,.12)"} strokeWidth={on ? 3 : 2}
-              opacity={stops && !on ? 0.25 : 1} />
-            <text x={x} y={y + 6} textAnchor="middle" fontSize={on ? 17 : 12} fontWeight="900" fill="#fff"
-              opacity={stops && !on ? 0.5 : 1}>{on ? order + 1 : fi + 1}</text>
+          <g key={fi} opacity={stops && !on ? 0.3 : 1}>
+            <circle cx={x} cy={y} r={r} fill={f.color} stroke={on ? CORAL : LINE} strokeWidth={on ? 3.5 : 2.5} />
+            <ellipse cx={x - r * 0.36} cy={y - r * 0.42} rx={r * 0.3} ry={r * 0.17} fill="#fff" opacity="0.5" />
+            <text x={x} y={y + 6} textAnchor="middle" fontSize={on ? 17 : 12} fontWeight="900" fill="#fff">
+              {on ? order + 1 : fi + 1}
+            </text>
           </g>
         );
       })}
       {(() => {
         const [x, y] = pt(8);
         return (
-          <g>
-            <circle cx={x} cy={y} r={16} fill={DANG.color} stroke="rgba(0,0,0,.12)" strokeWidth="2"
-              opacity={stops ? 0.6 : 1} />
+          <g opacity={stops ? 0.65 : 1}>
+            <circle cx={x} cy={y} r={17} fill={DANG.color} stroke={LINE} strokeWidth="2.5" />
             <text x={x} y={y + 5} textAnchor="middle" fontSize="11" fontWeight="900" fill="#fff">당</text>
           </g>
         );
       })()}
-      <text x={C} y={C - 4} textAnchor="middle" fontSize="12" fontWeight="700" fill={FAINT}>자리 1~8</text>
+      <text x={C} y={C - 4} textAnchor="middle" fontSize="12" fontWeight="800" fill={FAINT}>자리 1~8</text>
       <text x={C} y={C + 14} textAnchor="middle" fontSize="11" fontWeight="700" fill={FAINT}>당 = 디선당(상시)</text>
     </svg>
   );
 }
 
 /* ── 등록 화면 ── */
-function Register({ regs, settings, onDone }) {
+function Register({ settings, onDone }) {
   const [school, setSchool] = useState("");
   const [name, setName] = useState("");
   const [color, setColor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // 등록 화면에서만 5초 간격으로 잔여석 폴링
+  const state = usePolled("state", 5000, true, null);
 
-  const counts = useMemo(() => tally(regs), [regs]);
+  const counts = useMemo(() => {
+    if (!state || !state.counts) return [Array(8).fill(0), Array(8).fill(0), Array(8).fill(0)];
+    return state.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0));
+  }, [state]);
   const cap = capacityFor(counts, settings);
   const schools = useMemo(
-    () => String(settings.schools || "").split("\n").map((s) => s.trim()).filter(Boolean),
-    [settings.schools]
+    () => String((settings && settings.schools) || "").split("\n").map((s) => s.trim()).filter(Boolean),
+    [settings]
   );
-
-  const dup = useMemo(() => {
-    const n = name.trim(), s = school.trim();
-    return n && regs.find((r) => r.name === n && r.school === s);
-  }, [regs, name, school]);
 
   async function submit() {
     const s = school.trim(), n = name.trim();
     if (!s || !n) { setErr("학교와 이름을 입력해 주세요."); return; }
     if (color === null) { setErr("1스쿱으로 시작할 색을 골라 주세요."); return; }
-    if (dup) { setErr("이미 등록되어 있습니다. ‘내 자리’에서 확인하세요."); return; }
     setBusy(true); setErr("");
     try {
-      // 트랜잭션: 등록 순번·라운드별 인원을 원자적으로 갱신해 동시 등록 유실을 막는다 (문서 7장 유의사항)
-      const stRef = db.ref(`${ROOT}/state`);
+      // 조건부 저장(ETag)으로 동시 등록 충돌을 안전하게 처리 — 실패 시 재시도
       let assigned = null;
-      const res = await stRef.transaction((st) => {
-        st = st || { seq: 0, counts: null };
-        const c = st.counts
+      for (let attempt = 0; attempt < 7 && !assigned; attempt++) {
+        const { etag, data: st } = await dbGetEtag("state");
+        const c = st && st.counts
           ? st.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0))
           : [Array(8).fill(0), Array(8).fill(0), Array(8).fill(0)];
         const capNow = capacityFor(c, settings);
-        if ((c[0][color] || 0) >= capNow) return; // 마감 → 트랜잭션 중단
+        if ((c[0][color] || 0) >= capNow) {
+          setErr("방금 그 색이 마감되었습니다. 다른 색을 골라 주세요.");
+          setBusy(false); setColor(null); return;
+        }
         const stops = autoStops(color, c);
         stops.forEach((f, i) => { c[i][f] += 1; });
-        assigned = { stops, seq: (st.seq || 0) + 1 };
-        return { seq: assigned.seq, counts: c };
-      });
-      if (!res.committed || !assigned) {
-        setErr("방금 그 색이 마감되었습니다. 다른 색을 골라 주세요.");
-        setBusy(false); setColor(null);
-        return;
+        const seq = ((st && st.seq) || 0) + 1;
+        const status = await dbPutIfMatch("state", etag, { seq, counts: c });
+        if (status === 200) assigned = { stops, seq };
+        else if (status === 412) await new Promise((r) => setTimeout(r, 150 + Math.random() * 400));
+        else throw new Error("save " + status);
       }
-      const rec = { school: s, name: n, stops: assigned.stops, seq: assigned.seq,
-        ts: firebase.database.ServerValue.TIMESTAMP };
-      const ref = await db.ref(`${ROOT}/regs`).push(rec);
-      localStorage.setItem("konfesta31_me", JSON.stringify({ id: ref.key, school: s, name: n }));
-      onDone(ref.key);
+      if (!assigned) { setErr("등록이 몰리고 있어요. 잠시 후 다시 시도해 주세요."); setBusy(false); return; }
+      const id = await dbPush("regs", {
+        school: s, name: n, stops: assigned.stops, seq: assigned.seq, ts: { ".sv": "timestamp" },
+      });
+      localStorage.setItem("konfesta31_me", JSON.stringify({ id, school: s, name: n }));
+      onDone();
     } catch (e) {
       setErr("저장에 실패했습니다. 네트워크를 확인하고 다시 시도해 주세요.");
     }
@@ -214,29 +273,29 @@ function Register({ regs, settings, onDone }) {
 
   return (
     <section className="mx-auto max-w-lg">
-      <div className="rounded-2xl p-5" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-        <h2 className="text-lg font-black">셀프 등록</h2>
-        <p className="mt-1 text-xs" style={{ color: MUTED }}>
-          고른 색이 <b>1스쿱 고정 자리</b>가 됩니다. 2·3스쿱은 겹치지 않게 자동으로 정해집니다.
+      <div className="p-6" style={card()}>
+        <h2 className="text-xl font-black" style={{ color: CORAL }}>셀프 등록</h2>
+        <p className="mt-1.5 text-xs leading-relaxed" style={{ color: MUTED }}>
+          고른 색이 <b style={{ color: INK }}>1스쿱 고정 자리</b>가 됩니다. 2·3스쿱은 겹치지 않게 자동으로 정해져요.
         </p>
 
-        <label className="mt-4 block text-xs font-bold" style={{ color: MUTED }}>학교</label>
+        <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>학교</label>
         <input list="school-list" value={school} onChange={(e) => setSchool(e.target.value)}
           placeholder={schools.length ? "학교 이름 검색" : "학교 이름 입력"}
-          className="mt-1 w-full rounded-xl px-3 py-2.5 text-base font-bold outline-none focus:ring-2"
-          style={{ background: PAPER, border: `1px solid ${RULE}` }} />
+          className="mt-1.5 w-full px-4 py-3 text-base font-bold outline-none focus:ring-2"
+          style={input} />
         <datalist id="school-list">{schools.map((s) => <option key={s} value={s} />)}</datalist>
 
-        <label className="mt-3 block text-xs font-bold" style={{ color: MUTED }}>이름</label>
+        <label className="mt-4 block text-xs font-extrabold" style={{ color: MUTED }}>이름</label>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름 입력"
-          className="mt-1 w-full rounded-xl px-3 py-2.5 text-base font-bold outline-none focus:ring-2"
-          style={{ background: PAPER, border: `1px solid ${RULE}` }} />
+          className="mt-1.5 w-full px-4 py-3 text-base font-bold outline-none focus:ring-2"
+          style={input} />
 
-        <div className="mt-4 flex items-baseline justify-between">
-          <span className="text-xs font-bold" style={{ color: MUTED }}>1스쿱 색 선택</span>
-          <span className="text-[11px]" style={{ color: FAINT }}>색상별 정원 {cap}명</span>
+        <div className="mt-5 flex items-baseline justify-between">
+          <span className="text-xs font-extrabold" style={{ color: MUTED }}>1스쿱 색 선택</span>
+          <span className="rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ background: CHIP, color: FAINT }}>색상별 정원 {cap}명</span>
         </div>
-        <div className="mt-2 grid grid-cols-2 gap-2">
+        <div className="mt-2.5 grid grid-cols-2 gap-2.5">
           {FLAVORS.map((f, fi) => {
             const used = counts[0][fi] || 0;
             const left = Math.max(0, cap - used);
@@ -244,16 +303,20 @@ function Register({ regs, settings, onDone }) {
             const on = color === fi;
             return (
               <button key={fi} disabled={closed} onClick={() => { setColor(fi); setErr(""); }}
-                className="flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-left"
+                className="flex items-center gap-2.5 px-3 py-3 text-left transition-transform active:scale-95"
                 style={{
-                  background: on ? INK : closed ? "#EFEAE0" : PAPER,
-                  border: on ? `2px solid ${INK}` : `1px solid ${RULE}`,
-                  opacity: closed ? 0.55 : 1,
+                  background: on ? f.color : closed ? "#F4ECE2" : "#FFF9F1",
+                  border: on ? `2.5px solid ${CORAL}` : `2px solid ${closed ? "#E8DCCE" : LINE_SOFT}`,
+                  borderRadius: 20, opacity: closed ? 0.55 : 1,
+                  boxShadow: on ? SHADOW : "none",
                 }}>
-                <span className="h-6 w-6 shrink-0 rounded-full" style={{ background: f.color }} />
+                <span className="relative h-7 w-7 shrink-0 rounded-full"
+                  style={{ background: f.color, border: on ? "2px solid rgba(255,255,255,.8)" : `2px solid ${LINE_SOFT}` }}>
+                  <span className="absolute left-1 top-1 h-2 w-2.5 rounded-full bg-white opacity-60" />
+                </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-bold" style={{ color: on ? "#fff" : INK }}>{f.name}</span>
-                  <span className="block truncate text-[11px]" style={{ color: on ? "rgba(255,255,255,.7)" : FAINT }}>
+                  <span className="block truncate text-sm font-extrabold" style={{ color: on ? "#fff" : INK }}>{f.name}</span>
+                  <span className="block truncate text-[11px] font-bold" style={{ color: on ? "rgba(255,255,255,.85)" : FAINT }}>
                     {f.cname} · {f.host} · {closed ? "마감" : `남은 자리 ${left}`}
                   </span>
                 </span>
@@ -261,23 +324,18 @@ function Register({ regs, settings, onDone }) {
             );
           })}
         </div>
-        <p className="mt-2 text-[11px]" style={{ color: FAINT }}>
-          연보라(디선당)는 상시 오픈 상담 부스라 선택지에 없습니다. 어느 라운드든 배정 자리 대신 방문할 수 있어요.
+        <p className="mt-2.5 text-[11px] leading-relaxed" style={{ color: FAINT }}>
+          연보라(디선당)는 상시 오픈 상담 부스라 선택지에 없어요. 어느 라운드든 배정 자리 대신 방문할 수 있습니다.
         </p>
 
-        {err && <p className="mt-3 rounded-lg px-3 py-2 text-sm font-bold" style={{ background: "#FBE9E7", color: "#B3261E" }}>{err}</p>}
-        {dup && !err && (
-          <p className="mt-3 rounded-lg px-3 py-2 text-xs font-bold" style={{ background: CREAM, color: MUTED }}>
-            같은 학교·이름으로 이미 등록되어 있습니다. ‘내 자리’ 탭에서 확인하세요.
-          </p>
-        )}
+        {err && <p className="mt-4 px-4 py-2.5 text-sm font-bold" style={{ background: "#FDEAE4", color: DANGER, borderRadius: 16 }}>{err}</p>}
 
         <button onClick={submit} disabled={busy}
-          className="mt-4 w-full rounded-xl py-3 text-base font-black text-white"
-          style={{ background: busy ? FAINT : INK }}>
-          {busy ? "배정 중…" : "등록하고 3스쿱 받기"}
+          className="mt-5 w-full py-3.5 text-base font-black text-white transition-transform active:scale-95"
+          style={{ background: busy ? FAINT : CORAL, borderRadius: 999, boxShadow: SHADOW }}>
+          {busy ? "배정 중…" : "등록하고 3스쿱 받기 🍨"}
         </button>
-        <p className="mt-3 text-center text-[11px] font-bold" style={{ color: "#B3261E" }}>
+        <p className="mt-3 text-center text-[11px] font-extrabold" style={{ color: DANGER }}>
           등록하면 자리가 확정되며 변경할 수 없습니다.
         </p>
       </div>
@@ -286,28 +344,61 @@ function Register({ regs, settings, onDone }) {
 }
 
 /* ── 내 자리 화면 ── */
-function MySeat({ regs, goRegister }) {
+function MySeat({ goRegister }) {
+  const [mine, setMine] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
-  const me = useMemo(() => {
-    try { return JSON.parse(localStorage.getItem("konfesta31_me") || "null"); } catch { return null; }
-  }, [regs.length]);
-  const mine = useMemo(() => {
-    if (me && regs.find((r) => r.id === me.id)) return regs.find((r) => r.id === me.id);
-    const s = q.trim();
-    if (!s) return null;
-    return regs.find((r) => r.name === s) ||
-      regs.find((r) => (r.school + " " + r.name).includes(s) || (r.name + " " + r.school).includes(s));
-  }, [me, regs, q]);
+  const [searching, setSearching] = useState(false);
 
+  // 내 기록만 1회 조회 — 폴링 없음 (배정은 바뀌지 않으므로)
+  useEffect(() => {
+    (async () => {
+      try {
+        const me = JSON.parse(localStorage.getItem("konfesta31_me") || "null");
+        if (me && me.id) {
+          const r = await dbGet(`regs/${me.id}`);
+          if (r && r.stops) { setMine({ id: me.id, ...r }); setLoading(false); return; }
+        }
+      } catch {}
+      setLoading(false);
+    })();
+  }, []);
+
+  async function search() {
+    const s = q.trim();
+    if (!s) return;
+    setSearching(true);
+    try {
+      const all = regsToList(await dbGet("regs"));
+      const hit = all.find((r) => r.name === s) ||
+        all.find((r) => (r.school + " " + r.name).includes(s) || (r.name + " " + r.school).includes(s));
+      if (hit) {
+        setMine(hit);
+        localStorage.setItem("konfesta31_me", JSON.stringify({ id: hit.id, school: hit.school, name: hit.name }));
+      } else alert("등록 내역을 찾지 못했어요. 이름을 다시 확인해 주세요.");
+    } catch { alert("조회에 실패했어요. 네트워크를 확인해 주세요."); }
+    setSearching(false);
+  }
+
+  if (loading) {
+    return <p className="mx-auto max-w-lg px-4 py-12 text-center text-sm font-bold" style={{ color: FAINT }}>불러오는 중…</p>;
+  }
   if (!mine) {
     return (
       <section className="mx-auto max-w-lg">
-        <div className="rounded-2xl p-5 text-center" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-          <p className="text-sm font-bold">등록 정보를 찾을 수 없습니다.</p>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름으로 찾기 (예: 김철수)"
-            className="mt-3 w-full rounded-xl px-3 py-2.5 text-center text-base font-bold outline-none focus:ring-2"
-            style={{ background: PAPER, border: `1px solid ${RULE}` }} />
-          <button onClick={goRegister} className="mt-3 rounded-xl px-4 py-2 text-sm font-bold text-white" style={{ background: INK }}>
+        <div className="p-6 text-center" style={card()}>
+          <p className="text-sm font-extrabold" style={{ color: INK }}>등록 정보를 찾을 수 없어요.</p>
+          <div className="mt-4 flex gap-2">
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름으로 찾기"
+              onKeyDown={(e) => { if (e.key === "Enter") search(); }}
+              className="w-full px-4 py-3 text-center text-base font-bold outline-none focus:ring-2" style={input} />
+            <button onClick={search} disabled={searching}
+              className="shrink-0 px-5 text-sm font-black text-white" style={{ background: CORAL, borderRadius: 18 }}>
+              {searching ? "…" : "찾기"}
+            </button>
+          </div>
+          <button onClick={goRegister} className="mt-4 px-5 py-2.5 text-sm font-black"
+            style={{ color: CORAL, border: `2px solid ${LINE}`, borderRadius: 999 }}>
             아직 등록 전이라면 → 등록하기
           </button>
         </div>
@@ -317,49 +408,55 @@ function MySeat({ regs, goRegister }) {
 
   return (
     <section className="mx-auto max-w-2xl">
-      <div className="rounded-2xl p-5" style={{ background: "#fff", border: `2px solid ${INK}` }}>
+      <div className="p-6" style={card({ border: `3px solid ${CORAL}` })}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <div className="text-4xl font-black tabular-nums">{mine.seq}<span className="ml-1 text-base font-bold" style={{ color: FAINT }}>번</span></div>
-            <div className="mt-1 text-sm font-bold" style={{ color: MUTED }}>{mine.school} · {mine.name}</div>
+            <div className="text-4xl font-black tabular-nums" style={{ color: CORAL }}>
+              {mine.seq}<span className="ml-1 text-base font-extrabold" style={{ color: FAINT }}>번</span>
+            </div>
+            <div className="mt-1 text-sm font-extrabold" style={{ color: MUTED }}>{mine.school} · {mine.name}</div>
           </div>
-          <div className="flex items-center gap-1.5 rounded-xl px-4 py-2" style={{ background: INK }}>
+          <div className="flex items-center gap-1.5 rounded-full px-3 py-2" style={{ background: CHIP, border: `2px solid ${LINE_SOFT}` }}>
             {mine.stops.map((f, i) => (
-              <span key={i} className="h-7 w-7 rounded-full text-center text-sm font-black leading-7 text-white"
-                style={{ background: FLAVORS[f].color }}>{i + 1}</span>
+              <span key={i} className="relative h-8 w-8 rounded-full text-center text-sm font-black leading-8 text-white"
+                style={{ background: FLAVORS[f].color, border: `2px solid ${CORAL}` }}>
+                <span className="absolute left-1 top-1 h-2 w-2.5 rounded-full bg-white opacity-50" />{i + 1}
+              </span>
             ))}
           </div>
         </div>
 
-        <div className="mt-5 flex flex-col items-center gap-5 sm:flex-row sm:items-start">
+        <div className="mt-6 flex flex-col items-center gap-6 sm:flex-row sm:items-start">
           <Cone stops={mine.stops} size={0.8} />
           <div className="min-w-0 flex-1">
             {mine.stops.map((f, i) => {
               const fl = FLAVORS[f];
               return (
-                <div key={i} className="flex items-center gap-3 py-2.5" style={{ borderTop: `1px solid ${RULE}` }}>
+                <div key={i} className="flex items-center gap-3 py-3" style={{ borderTop: `2px dashed ${LINE_SOFT}` }}>
                   <span className="w-4 text-center text-xs font-black" style={{ color: FAINT }}>{i + 1}</span>
-                  <span className="h-8 w-8 shrink-0 rounded-full" style={{ background: fl.color }} />
+                  <span className="relative h-9 w-9 shrink-0 rounded-full" style={{ background: fl.color, border: `2.5px solid ${CORAL}` }}>
+                    <span className="absolute left-1.5 top-1.5 h-2 w-3 rounded-full bg-white opacity-50" />
+                  </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-baseline gap-x-2">
-                      <span className="font-bold">{fl.name}</span>
-                      <span className="text-xs" style={{ color: FAINT }}>{fl.cname} · {f + 1}번 자리</span>
+                      <span className="font-extrabold" style={{ color: INK }}>{fl.name}</span>
+                      <span className="text-xs font-bold" style={{ color: FAINT }}>{fl.cname} · {f + 1}번 자리</span>
                     </div>
                     <div className="truncate text-xs" style={{ color: MUTED }}>{fl.host} · {fl.topic}</div>
                   </div>
-                  {i === 0 && <span className="rounded-lg px-2 py-1 text-[10px] font-black text-white" style={{ background: INK }}>착석 시작</span>}
+                  {i === 0 && <span className="rounded-full px-2.5 py-1 text-[10px] font-black text-white" style={{ background: CORAL }}>착석 시작</span>}
                 </div>
               );
             })}
           </div>
-          <Ring stops={mine.stops} size={210} />
+          <Ring stops={mine.stops} size={205} />
         </div>
 
-        <p className="mt-4 rounded-xl px-3 py-2 text-xs font-bold" style={{ background: "#FBE9E7", color: "#B3261E" }}>
+        <p className="mt-5 px-4 py-3 text-xs font-extrabold leading-relaxed" style={{ background: "#FDEAE4", color: DANGER, borderRadius: 18 }}>
           배정된 자리를 지켜 주세요. 다른 발표 테이블에서는 스쿱 스티커를 받을 수 없습니다.
-          단 하나의 예외 — 디선당(연보라)은 어느 라운드든 배정 자리 대신 선택할 수 있습니다.
+          단 하나의 예외 — 디선당(연보라)은 어느 라운드든 배정 자리 대신 선택할 수 있어요.
         </p>
-        <p className="mt-2 rounded-xl px-3 py-2 text-xs" style={{ background: CREAM, color: MUTED }}>
+        <p className="mt-2.5 px-4 py-3 text-xs leading-relaxed" style={{ background: CHIP, color: MUTED, borderRadius: 18 }}>
           1스쿱 자리에 앉아 시작하고, 라운드가 바뀔 때마다 이 화면을 다시 열어 다음 자리를 확인하세요.
         </p>
       </div>
@@ -367,76 +464,76 @@ function MySeat({ regs, goRegister }) {
   );
 }
 
-/* ── 테이블 명단 (발표자용) ── */
-function Roster({ regs }) {
+/* ── 테이블 명단 (발표자용) — 5초 폴링 ── */
+function Roster({ active }) {
   const [flavor, setFlavor] = useState(0);
   const [round, setRound] = useState(0);
-  const list = useMemo(
-    () => regs.filter((r) => r.stops[round] === flavor),
-    [regs, flavor, round]
-  );
+  const regsObj = usePolled("regs", 5000, active, {});
+  const regs = useMemo(() => regsToList(regsObj), [regsObj]);
+  const list = useMemo(() => regs.filter((r) => r.stops[round] === flavor), [regs, flavor, round]);
   const f = FLAVORS[flavor];
+
+  const pill = (on) => ({
+    background: on ? CORAL : CARD, color: on ? "#fff" : MUTED,
+    border: `2px solid ${on ? CORAL : LINE_SOFT}`, borderRadius: 999,
+  });
+
   return (
     <section className="mx-auto max-w-2xl">
       <div className="flex flex-wrap gap-1.5">
         {FLAVORS.map((fl, fi) => (
           <button key={fi} onClick={() => setFlavor(fi)}
-            className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold"
-            style={{
-              background: flavor === fi ? INK : "#fff", color: flavor === fi ? "#fff" : INK,
-              border: `1px solid ${flavor === fi ? INK : RULE}`,
-            }}>
-            <span className="h-3.5 w-3.5 rounded-full" style={{ background: fl.color }} />{fl.cname}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-extrabold" style={pill(flavor === fi)}>
+            <span className="h-3.5 w-3.5 rounded-full" style={{ background: fl.color, border: "1.5px solid rgba(255,255,255,.7)" }} />{fl.cname}
           </button>
         ))}
       </div>
       <div className="mt-2 flex gap-1.5">
         {[0, 1, 2].map((r) => (
-          <button key={r} onClick={() => setRound(r)}
-            className="rounded-xl px-4 py-2 text-xs font-bold"
-            style={{
-              background: round === r ? INK : "#fff", color: round === r ? "#fff" : INK,
-              border: `1px solid ${round === r ? INK : RULE}`,
-            }}>{r + 1}스쿱</button>
+          <button key={r} onClick={() => setRound(r)} className="px-4 py-2 text-xs font-extrabold" style={pill(round === r)}>
+            {r + 1}스쿱
+          </button>
         ))}
       </div>
 
-      <div className="mt-4 rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
+      <div className="mt-4 p-5" style={card()}>
         <div className="flex items-baseline justify-between">
-          <h2 className="text-base font-black">
-            <span className="mr-2 inline-block h-3.5 w-3.5 translate-y-0.5 rounded-full" style={{ background: f.color }} />
+          <h2 className="text-base font-black" style={{ color: INK }}>
+            <span className="mr-2 inline-block h-4 w-4 translate-y-0.5 rounded-full" style={{ background: f.color, border: `2px solid ${CORAL}` }} />
             {f.name} · {round + 1}스쿱 명단
           </h2>
-          <span className="text-sm font-black tabular-nums">{list.length}명</span>
+          <span className="rounded-full px-3 py-1 text-sm font-black text-white" style={{ background: CORAL }}>{list.length}명</span>
         </div>
-        <p className="mt-1 text-[11px]" style={{ color: FAINT }}>
-          {f.host} · {f.topic} — 등록되는 대로 실시간 갱신됩니다.
+        <p className="mt-1.5 text-[11px] font-bold" style={{ color: FAINT }}>
+          {f.host} · {f.topic} — 5초마다 자동 갱신됩니다.
         </p>
         {list.length === 0 ? (
-          <p className="mt-4 rounded-xl px-3 py-6 text-center text-sm" style={{ background: CREAM, color: FAINT }}>아직 배정된 참가자가 없습니다.</p>
+          <p className="mt-4 px-4 py-8 text-center text-sm font-bold" style={{ background: CHIP, color: FAINT, borderRadius: 18 }}>
+            아직 배정된 참가자가 없어요.
+          </p>
         ) : (
           <div className="mt-3 overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead>
-                <tr style={{ background: CREAM }}>
+                <tr>
                   {["순번", "이름", "학교"].map((h) => (
-                    <th key={h} className="whitespace-nowrap px-3 py-1.5 text-xs font-bold" style={{ color: MUTED }}>{h}</th>
+                    <th key={h} className="whitespace-nowrap px-3 py-2 text-xs font-extrabold" style={{ color: FAINT, background: CHIP }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {list.map((r) => (
-                  <tr key={r.id} style={{ borderTop: `1px solid ${RULE}` }}>
-                    <td className="px-3 py-1.5 font-black tabular-nums">{r.seq}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5 font-bold">{r.name}</td>
-                    <td className="whitespace-nowrap px-3 py-1.5" style={{ color: MUTED }}>{r.school}</td>
+                  <tr key={r.id} style={{ borderTop: `2px dashed ${LINE_SOFT}` }}>
+                    <td className="px-3 py-2 font-black tabular-nums" style={{ color: CORAL }}>{r.seq}</td>
+                    <td className="whitespace-nowrap px-3 py-2 font-extrabold" style={{ color: INK }}>{r.name}</td>
+                    <td className="whitespace-nowrap px-3 py-2" style={{ color: MUTED }}>{r.school}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        <p className="mt-3 text-[11px]" style={{ color: MUTED }}>
+        <p className="mt-3 text-[11px] leading-relaxed" style={{ color: MUTED }}>
           라운드 시작 직후 착석자와 대조하고, 명단에 없는 분께는 스티커를 배부하지 않습니다.
         </p>
       </div>
@@ -444,34 +541,35 @@ function Roster({ regs }) {
   );
 }
 
-/* ── 럭키드로우 결과 (전체 공개) ── */
-function DrawBoard({ draws }) {
+/* ── 럭키드로우 결과 — 8초 폴링 ── */
+function DrawBoard({ active }) {
+  const draws = usePolled("draws", 8000, active, {});
   const rounds = Object.entries(draws || {}).sort((a, b) => (a[1].ts || 0) - (b[1].ts || 0));
   if (!rounds.length) {
-    return <p className="mx-auto max-w-lg rounded-xl px-4 py-10 text-center text-sm" style={{ background: CREAM, color: FAINT }}>
-      아직 추첨 전입니다. 3스쿱을 모으면 자동으로 응모됩니다.
+    return <p className="mx-auto max-w-lg px-4 py-12 text-center text-sm font-bold" style={{ background: CHIP, color: FAINT, borderRadius: 24 }}>
+      아직 추첨 전이에요. 3스쿱을 모으면 자동으로 응모됩니다. 🍀
     </p>;
   }
   return (
     <section className="mx-auto max-w-3xl space-y-5">
       {rounds.map(([id, d]) => (
-        <div key={id} className="rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-          <h2 className="text-base font-black">{d.label || "럭키 드로우"}</h2>
+        <div key={id} className="p-5" style={card()}>
+          <h2 className="text-base font-black" style={{ color: CORAL }}>🎉 {d.label || "럭키 드로우"}</h2>
           {(d.tiers || []).map((t, ti) => (
-            <div key={ti} className="mt-3">
-              <div className="text-sm font-black" style={{ color: MUTED }}>{t.name} <span style={{ color: FAINT }}>({(t.winners || []).length}명)</span></div>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <div key={ti} className="mt-3.5">
+              <div className="text-sm font-black" style={{ color: INK }}>{t.name} <span style={{ color: FAINT }}>({(t.winners || []).length}명)</span></div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
                 {(t.winners || []).map((w, wi) => (
-                  <span key={wi} className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold"
-                    style={{ background: CREAM }}>
-                    <span className="h-3 w-3 rounded-full" style={{ background: FLAVORS[w.table].color }} />
+                  <span key={wi} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-extrabold"
+                    style={{ background: CHIP, border: `2px solid ${LINE_SOFT}`, borderRadius: 999, color: INK }}>
+                    <span className="h-3 w-3 rounded-full" style={{ background: FLAVORS[w.table].color, border: `1.5px solid ${CORAL}` }} />
                     {w.seq}번 {w.name} <span style={{ color: FAINT }}>· {w.school}</span>
                   </span>
                 ))}
               </div>
             </div>
           ))}
-          <p className="mt-3 text-[11px]" style={{ color: FAINT }}>
+          <p className="mt-3.5 text-[11px] font-bold" style={{ color: FAINT }}>
             색 점 = 3스쿱(마지막) 테이블. 리플렛의 스티커 3장을 보여주고 경품을 받아 가세요.
           </p>
         </div>
@@ -480,33 +578,46 @@ function DrawBoard({ draws }) {
   );
 }
 
-/* ── 운영 설정 (관리자) ── */
-function Admin({ regs, settings, draws }) {
+/* ── 운영 설정 (관리자) — 5초 폴링 ── */
+function Admin({ active }) {
   const [ok, setOk] = useState(() => sessionStorage.getItem("konfesta31_admin") === "1");
   const [pw, setPw] = useState("");
-  const [schools, setSchools] = useState(String(settings.schools || ""));
-  const [baseCap, setBaseCap] = useState(settings.baseCap || 20);
-  const [maxCap, setMaxCap] = useState(settings.maxCap || 25);
-  const [tierText, setTierText] = useState(settings.tierText || "1등 기계식 키보드,20\n2등 노트북 파우치,20\n3등 보조배터리,20\n4등 베라 트리플 주니어,138");
-  const [msg, setMsg] = useState("");
-  useEffect(() => { setSchools(String(settings.schools || "")); }, [settings.schools]);
-  useEffect(() => { if (settings.baseCap) setBaseCap(settings.baseCap); }, [settings.baseCap]);
-  useEffect(() => { if (settings.maxCap) setMaxCap(settings.maxCap); }, [settings.maxCap]);
-  useEffect(() => { if (settings.tierText) setTierText(settings.tierText); }, [settings.tierText]);
+  const settings = usePolled("settings", 15000, active && ok, {});
+  const regsObj = usePolled("regs", 5000, active && ok, {});
+  const draws = usePolled("draws", 8000, active && ok, {});
+  const regs = useMemo(() => regsToList(regsObj), [regsObj]);
 
-  const ADMIN_PW = settings.adminPw || "digital31";
+  const [schools, setSchools] = useState("");
+  const [baseCap, setBaseCap] = useState(20);
+  const [maxCap, setMaxCap] = useState(25);
+  const [tierText, setTierText] = useState("1등 기계식 키보드,20\n2등 노트북 파우치,20\n3등 보조배터리,20\n4등 베라 트리플 주니어,138");
+  const [msg, setMsg] = useState("");
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (loaded.current || !settings || !Object.keys(settings).length) return;
+    loaded.current = true;
+    if (settings.schools) setSchools(String(settings.schools));
+    if (settings.baseCap) setBaseCap(settings.baseCap);
+    if (settings.maxCap) setMaxCap(settings.maxCap);
+    if (settings.tierText) setTierText(settings.tierText);
+  }, [settings]);
+
+  const ADMIN_PW = (settings && settings.adminPw) || "digital31";
+
+  function enter() {
+    if (pw === ADMIN_PW) { sessionStorage.setItem("konfesta31_admin", "1"); setOk(true); }
+  }
 
   if (!ok) {
     return (
       <section className="mx-auto max-w-sm">
-        <div className="rounded-2xl p-5 text-center" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-          <p className="text-sm font-bold">운영진 전용 화면입니다.</p>
+        <div className="p-6 text-center" style={card()}>
+          <p className="text-sm font-extrabold" style={{ color: INK }}>운영진 전용 화면이에요. 🔑</p>
           <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="운영 비밀번호"
-            onKeyDown={(e) => { if (e.key === "Enter" && pw === ADMIN_PW) { sessionStorage.setItem("konfesta31_admin", "1"); setOk(true); } }}
-            className="mt-3 w-full rounded-xl px-3 py-2.5 text-center text-base font-bold outline-none focus:ring-2"
-            style={{ background: PAPER, border: `1px solid ${RULE}` }} />
-          <button onClick={() => { if (pw === ADMIN_PW) { sessionStorage.setItem("konfesta31_admin", "1"); setOk(true); } }}
-            className="mt-3 w-full rounded-xl py-2.5 text-sm font-black text-white" style={{ background: INK }}>들어가기</button>
+            onKeyDown={(e) => { if (e.key === "Enter") enter(); }}
+            className="mt-4 w-full px-4 py-3 text-center text-base font-bold outline-none focus:ring-2" style={input} />
+          <button onClick={enter} className="mt-4 w-full py-3 text-sm font-black text-white"
+            style={{ background: CORAL, borderRadius: 999, boxShadow: SHADOW }}>들어가기</button>
         </div>
       </section>
     );
@@ -521,13 +632,10 @@ function Admin({ regs, settings, draws }) {
   function note(t) { setMsg(t); setTimeout(() => setMsg(""), 4000); }
 
   async function saveSettings() {
-    await db.ref(`${ROOT}/settings`).update({
-      schools, baseCap: Number(baseCap) || 20, maxCap: Number(maxCap) || 25, tierText,
-    });
+    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, maxCap: Number(maxCap) || 25, tierText });
     note("설정을 저장했습니다.");
   }
 
-  /* 중앙 일괄 추첨: 당첨자를 3스쿱 테이블별로 고르게 배당 (문서 7장 럭키드로우) */
   async function runDraw() {
     const tiers = tierText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
       const [name, n] = l.split(",");
@@ -540,7 +648,6 @@ function Admin({ regs, settings, draws }) {
     const need = tiers.reduce((a, t) => a + t.count, 0);
     if (!confirm(`미당첨 등록자 ${pool.length}명 중 ${need}명을 추첨합니다. 실행할까요?`)) return;
 
-    // 테이블(3스쿱 맛)별 그룹 → 각 등수를 테이블에 라운드로빈 배당
     const byTable = FLAVORS.map(() => []);
     pool.forEach((r) => byTable[r.stops[2]].push(r));
     byTable.forEach((g) => g.sort(() => Math.random() - 0.5));
@@ -550,7 +657,7 @@ function Admin({ regs, settings, draws }) {
       let tables = byTable.map((g, f) => ({ f, g })).filter((x) => x.g.length);
       let guard = t.count * 20;
       while (result[ti].winners.length < t.count && tables.length && guard--) {
-        tables.sort((a, b) => b.g.length - a.g.length); // 남은 인원 많은 테이블부터 → 고른 배당
+        tables.sort((a, b) => b.g.length - a.g.length);
         const slot = tables[0];
         const w = slot.g.shift();
         result[ti].winners.push({ id: w.id, seq: w.seq, name: w.name, school: w.school, table: w.stops[2] });
@@ -558,9 +665,9 @@ function Admin({ regs, settings, draws }) {
       }
     });
 
-    await db.ref(`${ROOT}/draws`).push({
+    await dbPush("draws", {
       label: `추첨 ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`,
-      tiers: result, ts: firebase.database.ServerValue.TIMESTAMP,
+      tiers: result, ts: { ".sv": "timestamp" },
     });
     note("추첨 완료. ‘럭키드로우’ 탭에 결과가 공개되었습니다.");
   }
@@ -589,37 +696,37 @@ function Admin({ regs, settings, draws }) {
   async function resetAll() {
     if (!confirm("등록 명단과 추첨 결과를 전부 삭제합니다. 행사 시작 전 시험 데이터 정리용입니다. 계속할까요?")) return;
     if (!confirm("정말 삭제할까요? 되돌릴 수 없습니다.")) return;
-    await db.ref(`${ROOT}/regs`).remove();
-    await db.ref(`${ROOT}/draws`).remove();
-    await db.ref(`${ROOT}/state`).remove();
+    await dbDelete("regs"); await dbDelete("draws"); await dbDelete("state");
     note("초기화했습니다.");
   }
 
+  const btnGhost = { color: INK, border: `2px solid ${LINE_SOFT}`, borderRadius: 999, background: CARD };
+
   return (
     <section className="mx-auto max-w-2xl space-y-5">
-      {msg && <p className="rounded-xl px-3 py-2 text-sm font-bold" style={{ background: "#E8F5E9", color: "#1B5E20" }}>{msg}</p>}
+      {msg && <p className="px-4 py-2.5 text-sm font-extrabold" style={{ background: OK_BG, color: OK_FG, borderRadius: 16 }}>{msg}</p>}
 
-      <div className="rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-        <h2 className="text-base font-black">현황</h2>
-        <p className="mt-1 text-sm" style={{ color: MUTED }}>
+      <div className="p-5" style={card()}>
+        <h2 className="text-base font-black" style={{ color: CORAL }}>현황</h2>
+        <p className="mt-1.5 text-sm" style={{ color: MUTED }}>
           등록 <b style={{ color: INK }}>{regs.length}명</b> · 현재 색상별 정원 <b style={{ color: INK }}>{cap}명</b>
-          {cap > (settings.baseCap || 20) && " (자동 상향 적용)"}
+          {cap > ((settings && settings.baseCap) || 20) && " (자동 상향 적용)"}
         </p>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead><tr style={{ background: CREAM }}>
-              <th className="px-2 py-1.5 font-bold" style={{ color: MUTED }}>맛</th>
-              {["1스쿱", "2스쿱", "3스쿱"].map((h) => <th key={h} className="px-2 py-1.5 font-bold" style={{ color: MUTED }}>{h}</th>)}
+            <thead><tr>
+              <th className="px-2 py-2 font-extrabold" style={{ color: FAINT, background: CHIP }}>맛</th>
+              {["1스쿱", "2스쿱", "3스쿱"].map((h) => <th key={h} className="px-2 py-2 font-extrabold" style={{ color: FAINT, background: CHIP }}>{h}</th>)}
             </tr></thead>
             <tbody>
               {FLAVORS.map((f, fi) => (
-                <tr key={fi} style={{ borderTop: `1px solid ${RULE}` }}>
-                  <td className="whitespace-nowrap px-2 py-1.5 font-bold">
-                    <span className="mr-1.5 inline-block h-3 w-3 translate-y-0.5 rounded-full" style={{ background: f.color }} />{f.cname}
+                <tr key={fi} style={{ borderTop: `2px dashed ${LINE_SOFT}` }}>
+                  <td className="whitespace-nowrap px-2 py-2 font-extrabold" style={{ color: INK }}>
+                    <span className="mr-1.5 inline-block h-3 w-3 translate-y-0.5 rounded-full" style={{ background: f.color, border: `1.5px solid ${CORAL}` }} />{f.cname}
                   </td>
                   {[0, 1, 2].map((r) => (
-                    <td key={r} className="px-2 py-1.5 font-black tabular-nums"
-                      style={{ color: counts[r][fi] > cap ? "#B3261E" : INK }}>{counts[r][fi]}</td>
+                    <td key={r} className="px-2 py-2 font-black tabular-nums"
+                      style={{ color: counts[r][fi] > cap ? DANGER : INK }}>{counts[r][fi]}</td>
                   ))}
                 </tr>
               ))}
@@ -628,50 +735,51 @@ function Admin({ regs, settings, draws }) {
         </div>
       </div>
 
-      <div className="rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-        <h2 className="text-base font-black">설정</h2>
-        <label className="mt-3 block text-xs font-bold" style={{ color: MUTED }}>학교 목록 (한 줄에 하나 · 등록 화면 검색에 사용)</label>
+      <div className="p-5" style={card()}>
+        <h2 className="text-base font-black" style={{ color: CORAL }}>설정</h2>
+        <label className="mt-3 block text-xs font-extrabold" style={{ color: MUTED }}>학교 목록 (한 줄에 하나 · 등록 화면 검색에 사용)</label>
         <textarea value={schools} onChange={(e) => setSchools(e.target.value)} rows={6}
           placeholder={"용강중학교\n○○중학교\n…"}
-          className="mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none focus:ring-2"
-          style={{ background: PAPER, border: `1px solid ${RULE}` }} />
+          className="mt-1.5 w-full px-4 py-3 text-sm outline-none focus:ring-2" style={input} />
         <div className="mt-3 flex flex-wrap gap-4">
-          <label className="flex items-center gap-2 text-xs font-bold" style={{ color: MUTED }}>
+          <label className="flex items-center gap-2 text-xs font-extrabold" style={{ color: MUTED }}>
             기본 정원 <input type="number" value={baseCap} onChange={(e) => setBaseCap(e.target.value)}
-              className="w-16 rounded-lg px-2 py-1 text-sm font-bold" style={{ border: `1px solid ${RULE}` }} />
+              className="w-16 px-2 py-1.5 text-sm font-bold" style={input} />
           </label>
-          <label className="flex items-center gap-2 text-xs font-bold" style={{ color: MUTED }}>
+          <label className="flex items-center gap-2 text-xs font-extrabold" style={{ color: MUTED }}>
             정원 상한 <input type="number" value={maxCap} onChange={(e) => setMaxCap(e.target.value)}
-              className="w-16 rounded-lg px-2 py-1 text-sm font-bold" style={{ border: `1px solid ${RULE}` }} />
+              className="w-16 px-2 py-1.5 text-sm font-bold" style={input} />
           </label>
         </div>
-        <p className="mt-1 text-[11px]" style={{ color: FAINT }}>8색이 모두 마감되면 정원이 +2씩 자동 상향됩니다 (상한까지).</p>
-        <label className="mt-3 block text-xs font-bold" style={{ color: MUTED }}>등수별 경품·인원 (한 줄에 “이름,인원”)</label>
+        <p className="mt-1.5 text-[11px]" style={{ color: FAINT }}>8색이 모두 마감되면 정원이 +2씩 자동 상향됩니다 (상한까지).</p>
+        <label className="mt-3 block text-xs font-extrabold" style={{ color: MUTED }}>등수별 경품·인원 (한 줄에 “이름,인원”)</label>
         <textarea value={tierText} onChange={(e) => setTierText(e.target.value)} rows={4}
-          className="mt-1 w-full rounded-xl px-3 py-2 text-sm outline-none focus:ring-2"
-          style={{ background: PAPER, border: `1px solid ${RULE}` }} />
-        <button onClick={saveSettings} className="mt-3 rounded-xl px-4 py-2 text-sm font-black text-white" style={{ background: INK }}>설정 저장</button>
+          className="mt-1.5 w-full px-4 py-3 text-sm outline-none focus:ring-2" style={input} />
+        <button onClick={saveSettings} className="mt-3.5 px-5 py-2.5 text-sm font-black text-white"
+          style={{ background: CORAL, borderRadius: 999, boxShadow: SHADOW }}>설정 저장</button>
       </div>
 
-      <div className="rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-        <h2 className="text-base font-black">럭키 드로우</h2>
-        <p className="mt-1 text-xs" style={{ color: MUTED }}>
+      <div className="p-5" style={card()}>
+        <h2 className="text-base font-black" style={{ color: CORAL }}>럭키 드로우</h2>
+        <p className="mt-1.5 text-xs leading-relaxed" style={{ color: MUTED }}>
           등록자 전체(기존 당첨자 제외)를 대상으로 일괄 추첨하고, 당첨자를 3스쿱 테이블별로 고르게 배당합니다.
-          재추첨하면 이전 당첨자는 자동 제외됩니다. 미당첨 등록자 {regs.length - prevWinnerIds.size}명.
+          재추첨하면 이전 당첨자는 자동 제외돼요. 미당첨 등록자 {regs.length - prevWinnerIds.size}명.
         </p>
-        <button onClick={runDraw} className="mt-3 rounded-xl px-4 py-2 text-sm font-black text-white" style={{ background: "#7A4C9E" }}>
-          추첨 실행
+        <button onClick={runDraw} className="mt-3.5 px-5 py-2.5 text-sm font-black text-white"
+          style={{ background: "#A07FD0", borderRadius: 999, boxShadow: "0 10px 24px rgba(160,127,208,.25)" }}>
+          🎁 추첨 실행
         </button>
       </div>
 
-      <div className="rounded-2xl p-4" style={{ background: "#fff", border: `1px solid ${RULE}` }}>
-        <h2 className="text-base font-black">데이터</h2>
+      <div className="p-5" style={card()}>
+        <h2 className="text-base font-black" style={{ color: CORAL }}>데이터</h2>
         <div className="mt-3 flex flex-wrap gap-2">
-          <button onClick={exportRegs} className="rounded-xl px-4 py-2 text-sm font-bold" style={{ border: `1px solid ${RULE}` }}>등록 명단 CSV</button>
-          <button onClick={exportWinners} className="rounded-xl px-4 py-2 text-sm font-bold" style={{ border: `1px solid ${RULE}` }}>당첨자 CSV</button>
-          <button onClick={resetAll} className="rounded-xl px-4 py-2 text-sm font-bold" style={{ background: "#FBE9E7", color: "#B3261E" }}>전체 초기화</button>
+          <button onClick={exportRegs} className="px-4 py-2.5 text-sm font-extrabold" style={btnGhost}>등록 명단 CSV</button>
+          <button onClick={exportWinners} className="px-4 py-2.5 text-sm font-extrabold" style={btnGhost}>당첨자 CSV</button>
+          <button onClick={resetAll} className="px-4 py-2.5 text-sm font-extrabold"
+            style={{ background: "#FDEAE4", color: DANGER, borderRadius: 999, border: "2px solid #F6C4BB" }}>전체 초기화</button>
         </div>
-        <p className="mt-2 text-[11px]" style={{ color: FAINT }}>행사 전 시험 등록분은 ‘전체 초기화’로 반드시 비워 주세요.</p>
+        <p className="mt-2.5 text-[11px]" style={{ color: FAINT }}>행사 전 시험 등록분은 ‘전체 초기화’로 반드시 비워 주세요.</p>
       </div>
     </section>
   );
@@ -681,10 +789,8 @@ function Admin({ regs, settings, draws }) {
 function App() {
   const [tab, setTab] = useState(() =>
     localStorage.getItem("konfesta31_me") ? "seat" : "register");
-  const regsObj = useShared("regs", {});
-  const settings = useShared("settings", {});
-  const draws = useShared("draws", {});
-  const regs = useMemo(() => regsToList(regsObj), [regsObj]);
+  // 설정은 가볍게 15초 폴링 (등록 화면의 학교 목록·정원에 사용)
+  const settings = usePolled("settings", 15000, true, {});
 
   const TABS = [
     { id: "register", label: "등록" },
@@ -695,39 +801,47 @@ function App() {
   ];
 
   return (
-    <div className="min-h-screen w-full px-4 py-6 sm:px-8"
-      style={{ background: PAPER, color: INK, fontFamily: "'Pretendard Variable','Pretendard','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif" }}>
+    <div className="min-h-screen w-full px-4 py-7 sm:px-8"
+      style={{ background: BG, color: INK, fontFamily: "'Pretendard Variable','Pretendard','Apple SD Gothic Neo','Malgun Gothic',system-ui,sans-serif" }}>
+      <Blobs />
       <div className="mx-auto max-w-5xl">
-        <header className="mb-5 text-center">
-          <p className="text-xs font-bold tracking-[0.2em]" style={{ color: "#B0A091" }}>
+        <header className="mb-6 text-center">
+          <p className="text-xs font-extrabold tracking-[0.25em]" style={{ color: FAINT }}>
             플레이버 워크숍 · B구역 · 중등
           </p>
-          <h1 className="mt-1 text-2xl font-black tracking-tight sm:text-3xl">디선 31 · 골라 담는 운영 꿀팁 3스쿱</h1>
-          <p className="mx-auto mt-1.5 max-w-xl text-xs sm:text-sm" style={{ color: MUTED }}>
-            선착순으로 시작 색을 고르면 3스쿱이 즉시 확정됩니다. 배정된 자리는 고정입니다.
+          <h1 className="mt-1.5 text-2xl font-black tracking-tight sm:text-3xl" style={{ color: INK }}>
+            디선 31 · 골라 담는 <span style={{ color: CORAL }}>운영 꿀팁 3스쿱</span>
+          </h1>
+          <p className="mx-auto mt-2 max-w-xl text-xs leading-relaxed sm:text-sm" style={{ color: MUTED }}>
+            선착순으로 시작 색을 고르면 3스쿱이 즉시 확정됩니다. 배정된 자리는 고정이에요.
           </p>
         </header>
 
-        <nav className="mb-6 flex flex-wrap justify-center gap-1" style={{ borderBottom: `2px solid ${RULE}` }}>
+        <nav className="mb-7 flex flex-wrap justify-center gap-1.5">
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
-              className="relative px-3.5 py-2 text-sm font-bold sm:px-4"
-              style={{ color: tab === t.id ? INK : FAINT }}>
+              className="px-4 py-2 text-sm font-extrabold transition-transform active:scale-95"
+              style={{
+                background: tab === t.id ? CORAL : CARD,
+                color: tab === t.id ? "#fff" : MUTED,
+                border: `2px solid ${tab === t.id ? CORAL : LINE_SOFT}`,
+                borderRadius: 999,
+                boxShadow: tab === t.id ? SHADOW : "none",
+              }}>
               {t.label}
-              {tab === t.id && <span className="absolute inset-x-0 -bottom-0.5 h-1 rounded-t" style={{ background: INK }} />}
             </button>
           ))}
         </nav>
 
-        {tab === "register" && <Register regs={regs} settings={settings} onDone={() => setTab("seat")} />}
-        {tab === "seat" && <MySeat regs={regs} goRegister={() => setTab("register")} />}
-        {tab === "roster" && <Roster regs={regs} />}
-        {tab === "draw" && <DrawBoard draws={draws} />}
-        {tab === "admin" && <Admin regs={regs} settings={settings} draws={draws} />}
+        {tab === "register" && <Register settings={settings} onDone={() => setTab("seat")} />}
+        {tab === "seat" && <MySeat goRegister={() => setTab("register")} />}
+        {tab === "roster" && <Roster active={tab === "roster"} />}
+        {tab === "draw" && <DrawBoard active={tab === "draw"} />}
+        {tab === "admin" && <Admin active={tab === "admin"} />}
 
-        <footer className="mt-10 pt-4 text-center text-xs" style={{ borderTop: `1px solid ${RULE}`, color: "#B0A091" }}>
+        <footer className="mt-12 pt-5 text-center text-xs leading-relaxed" style={{ borderTop: `2px dashed ${LINE_SOFT}`, color: FAINT }}>
           출석 체크와 질문·꿀팁 업로드는 콘페스타 플랫폼에서, 자리 배정·조회는 이 앱에서 합니다.
-          <br />연보라 라벤더 허니(디선당 · 이수진)는 세 라운드 내내 상시 오픈 — 언제든 배정 자리 대신 방문할 수 있습니다.
+          <br />연보라 라벤더 허니(디선당 · 이수진)는 세 라운드 내내 상시 오픈 — 언제든 배정 자리 대신 방문할 수 있어요.
         </footer>
       </div>
     </div>
