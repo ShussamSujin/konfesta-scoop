@@ -139,20 +139,12 @@ const input = { background: "#FFF9F1", border: `2px solid ${LINE_SOFT}`, borderR
 /* 자리별 총원(세 라운드 합) */
 const totalOf = (counts, f) => (counts[0][f] || 0) + (counts[1][f] || 0) + (counts[2][f] || 0);
 
-/* 정원 (노쇼 대비 자동 상향)
-   라운드당 기본 20명. 7개 자리가 모두 마감됐는데 미등록자가 남으면
-   전 자리 +2씩 자동 상향. 상한은 테이블당 12명 기준
-   (2테이블 자리 24명 · 보라는 테이블 수 × 12명). */
+/* 정원 (고정)
+   라운드당 기본 20명 — 한 주제로 쏠릴 때 다른 주제로 유도하는 안전장치.
+   등록 인원이 상품보다 적어 자리가 다 찰 일이 없으므로 자동 상향은 없음. */
 function capInfo(counts, settings) {
   const base = (settings && settings.baseCap) || 20;
-  const perTable = (settings && settings.perTable) || 12;
-  const ceilOf = (f) => FLAVORS[f].tables * perTable;
-  const capAt = (f, lvl) => Math.min(base + 2 * lvl, ceilOf(f));
-  const allClosed = (lvl) => FLAVORS.every((_, f) => totalOf(counts, f) >= 3 * capAt(f, lvl));
-  const canRaise = (lvl) => FLAVORS.some((_, f) => capAt(f, lvl) < ceilOf(f));
-  let lvl = 0;
-  while (allClosed(lvl) && canRaise(lvl)) lvl++;
-  return { level: lvl, roundCap: base + 2 * lvl, capOf: (f) => capAt(f, lvl) };
+  return { roundCap: base, capOf: () => base };
 }
 
 const emptyCounts = () => [Array(N).fill(0), Array(N).fill(0), Array(N).fill(0)];
@@ -346,11 +338,8 @@ function Register({ settings, onDone }) {
     if (!n) { setErr("이름을 입력해 주세요."); return; }
     if (p.length < 10 || p.length > 11) { setErr("연락처를 정확히 입력해 주세요. (숫자 10~11자리)"); return; }
     if (isOffice) {
-      // 교육청: 참석 명단 9명만 등록 가능, 스쿱 배정 없이 순번만 발급받고 예비 테이블로
-      if (!OFFICE_MEMBERS.includes(n)) {
-        setErr("서울특별시교육청 참석 명단(9명)에 없는 이름입니다. 이름을 다시 확인해 주세요.");
-        return;
-      }
+      // 교육청: 등록은 누구나 가능(스쿱 배정 없이 순번만 발급받고 예비 테이블로).
+      // 럭키드로우는 참석 명단 9명 중 등록자에게만 적용됨(운영 탭 교육청 추첨).
       setBusy(true); setErr("");
       try {
         let seq = null;
@@ -962,7 +951,6 @@ function Admin({ active }) {
 
   const [schools, setSchools] = useState("");
   const [baseCap, setBaseCap] = useState(20);
-  const [perTable, setPerTable] = useState(12);
   const [tierText, setTierText] = useState(EV.tierDefault);
   const [officeTierText, setOfficeTierText] = useState("교육청 럭키드로우 경품,2");
   const [msg, setMsg] = useState("");
@@ -972,7 +960,6 @@ function Admin({ active }) {
     loaded.current = true;
     if (settings.schools) setSchools(String(settings.schools));
     if (settings.baseCap) setBaseCap(settings.baseCap);
-    if (settings.perTable) setPerTable(settings.perTable);
     if (settings.tierText) setTierText(settings.tierText);
     if (settings.officeTierText) setOfficeTierText(settings.officeTierText);
   }, [settings]);
@@ -1007,7 +994,7 @@ function Admin({ active }) {
   function note(t) { setMsg(t); setTimeout(() => setMsg(""), 4000); }
 
   async function saveSettings() {
-    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, perTable: Number(perTable) || 12, tierText, officeTierText });
+    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, tierText, officeTierText });
     note("설정을 저장했습니다.");
   }
 
@@ -1022,26 +1009,48 @@ function Admin({ active }) {
     const tiers = parseTiers(tierText);
     if (!tiers.length) { note("등수별 인원을 입력해 주세요. (예: 1등 키보드,20)"); return; }
 
-    let pool = regs.filter((r) => !r.office && !prevWinnerIds.has(r.id));
+    // 교육청·기존 당첨자·스쿱 미배정 레코드는 제외
+    let pool = regs.filter((r) => !r.office && r.stops && !prevWinnerIds.has(r.id));
     if (!pool.length) { note("추첨 대상(미당첨 등록자)이 없습니다."); return; }
     const need = tiers.reduce((a, t) => a + t.count, 0);
-    if (!confirm(`미당첨 등록자 ${pool.length}명 중 ${need}명을 추첨합니다. 실행할까요?`)) return;
+    const drawTotal = Math.min(need, pool.length); // 상품이 인원보다 많으면 전원 당첨
+    if (!confirm(`미당첨 등록자 ${pool.length}명 중 ${drawTotal}명을 추첨합니다. 실행할까요?`)) return;
 
+    // 3스쿱(마지막) 테이블별로 묶고 각 테이블을 무작위로 섞는다
+    const shuffle = (arr) => {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    };
+    const nT = FLAVORS.length;
     const byTable = FLAVORS.map(() => []);
     pool.forEach((r) => byTable[r.stops[2]].push(r));
-    byTable.forEach((g) => g.sort(() => Math.random() - 0.5));
+    byTable.forEach(shuffle);
+    const idx = FLAVORS.map(() => 0);              // 각 테이블에서 소진한 인원 수
+    const remain = (f) => byTable[f].length - idx[f];
 
+    // 등수마다 독립적으로 라운드로빈: 테이블을 한 바퀴씩 돌며 한 명씩 뽑아
+    // 그 등수를 채운다 → 각 등수에서 테이블 간 인원 차이가 최대 1명.
+    // (인원이 남은 테이블이 없으면 조기 종료 — 상품이 인원보다 많으면 전원 당첨)
+    // 등수마다 시작 테이블을 한 칸씩 회전해 특정 테이블이 늘 한 명 더 받지 않게 한다.
     const result = tiers.map((t) => ({ name: t.name, winners: [] }));
+    let rot = Math.floor(Math.random() * nT);
     tiers.forEach((t, ti) => {
-      let tables = byTable.map((g, f) => ({ f, g })).filter((x) => x.g.length);
-      let guard = t.count * 20;
-      while (result[ti].winners.length < t.count && tables.length && guard--) {
-        tables.sort((a, b) => b.g.length - a.g.length);
-        const slot = tables[0];
-        const w = slot.g.shift();
-        result[ti].winners.push({ id: w.id, seq: w.seq, name: w.name, school: w.school || "", phone: w.phone || "", table: w.stops[2] });
-        tables = tables.filter((x) => x.g.length);
+      let filled = 0, anyLeft = true;
+      while (filled < t.count && anyLeft) {
+        anyLeft = false;
+        for (let k = 0; k < nT && filled < t.count; k++) {
+          const f = (rot + k) % nT;
+          if (remain(f) > 0) {
+            const w = byTable[f][idx[f]++];
+            result[ti].winners.push({ id: w.id, seq: w.seq, name: w.name, school: w.school || "", phone: w.phone || "", table: w.stops[2] });
+            filled++; anyLeft = true;
+          }
+        }
       }
+      rot = (rot + 1) % nT;
     });
 
     await dbPush("draws", {
@@ -1116,8 +1125,7 @@ function Admin({ active }) {
         <p className="mt-1.5 text-sm" style={{ color: MUTED }}>
           등록 <b style={{ color: INK }}>{regs.length}명</b>
           {regs.some((r) => r.office) && <> (교육청 예비 테이블 <b style={{ color: INK }}>{regs.filter((r) => r.office).length}명</b> 포함)</>}
-          {" · "}현재 라운드당 정원 <b style={{ color: INK }}>{ci.roundCap}명</b>
-          {ci.level > 0 && ` (자동 상향 +${ci.level * 2})`}
+          {" · "}라운드당 정원 <b style={{ color: INK }}>{ci.roundCap}명</b>
         </p>
         <div className="mt-3 overflow-x-auto">
           <table className="w-full text-left text-xs">
@@ -1150,17 +1158,13 @@ function Admin({ active }) {
           className="mt-1.5 w-full px-4 py-3 text-sm outline-none focus:ring-2" style={input} />
         <div className="mt-3 flex flex-wrap gap-4">
           <label className="flex items-center gap-2 text-xs font-extrabold" style={{ color: MUTED }}>
-            기본 정원 <input type="number" value={baseCap} onChange={(e) => setBaseCap(e.target.value)}
-              className="w-16 px-2 py-1.5 text-sm font-bold" style={input} />
-          </label>
-          <label className="flex items-center gap-2 text-xs font-extrabold" style={{ color: MUTED }}>
-            테이블당 상한 <input type="number" value={perTable} onChange={(e) => setPerTable(e.target.value)}
+            라운드당 정원 <input type="number" value={baseCap} onChange={(e) => setBaseCap(e.target.value)}
               className="w-16 px-2 py-1.5 text-sm font-bold" style={input} />
           </label>
         </div>
         <p className="mt-1.5 text-[11px]" style={{ color: FAINT }}>
-          7개 자리가 모두 마감되면 정원이 +2씩 자동 상향됩니다. 상한은 테이블당 {perTable}명 기준
-          — 2테이블 자리 {perTable * 2}명 · 보라({EV.purpleTables}테이블) {perTable * EV.purpleTables}명.
+          한 주제(자리)에 라운드당 이 인원까지 배정되면 ‘마감’으로 표시되어 다른 주제로 유도됩니다.
+          한 주제로 지나치게 쏠리지 않게 하는 안전장치예요.
         </p>
         <label className="mt-3 block text-xs font-extrabold" style={{ color: MUTED }}>등수별 경품·인원 (한 줄에 “이름,인원”)</label>
         <textarea value={tierText} onChange={(e) => setTierText(e.target.value)} rows={4}
