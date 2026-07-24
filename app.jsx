@@ -903,11 +903,20 @@ function DrawBoard({ active }) {
       아직 추첨 전이에요. 3스쿱을 모으면 자동으로 응모됩니다. 🍀
     </p>;
   }
+  const hasScoopDraw = rounds.some(([, d]) => !d.office);
   return (
     <section className="mx-auto max-w-3xl space-y-5">
       <style>{`
         @keyframes chippop { 0%{transform:scale(0);opacity:0} 70%{transform:scale(1.15)} 100%{transform:scale(1);opacity:1} }
       `}</style>
+      {hasScoopDraw && (
+        <div className="px-5 py-4 text-center" style={{ background: "#FDEAE4", border: `2.5px solid ${CORAL}`, borderRadius: 20 }}>
+          <p className="text-sm font-black leading-relaxed" style={{ color: DANGER }}>
+            🎁 럭키드로우 당첨자는 <span className="underline">리플렛의 3스쿱 스티커를 모두</span> 보여주셔야<br className="hidden sm:block" />
+            경품을 받아가실 수 있습니다.
+          </p>
+        </div>
+      )}
       {rounds.map(([id, d], di) => (
         <div key={id} className="p-5" style={card(di === 0 ? { border: `3px solid ${CORAL}` } : {})}>
           <h2 className="text-base font-black" style={{ color: CORAL }}>🎉 {d.label || "럭키 드로우"}</h2>
