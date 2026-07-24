@@ -106,6 +106,8 @@ const FLAVORS = FLAVOR_BASE.map((f, i) => ({
 }));
 const N = FLAVORS.length; // 7
 const DANG = { color: "#C6ADE8", cname: "연보라", name: "라벤더 허니", host: EV.dangHost, topic: "용한 디선당 · FAQ 상담 (상시 오픈)" };
+/* 교육청 소속: 스쿱 라운드 없이 예비 테이블에 주둔, 전용 럭키드로우 */
+const OFFICE_SCHOOL = "서울시교육청";
 const BUDGET = [0, 1];
 const REPORT = [2, 3, 4, 5];
 const NONBUDGET = [2, 3, 4, 5, 6];
@@ -155,7 +157,7 @@ const emptyCounts = () => [Array(N).fill(0), Array(N).fill(0), Array(N).fill(0)]
 
 function tally(regs) {
   const c = emptyCounts();
-  regs.forEach((r) => r.stops.forEach((f, i) => { if (f < N) c[i][f] += 1; }));
+  regs.forEach((r) => (r.stops || []).forEach((f, i) => { if (f < N) c[i][f] += 1; }));
   return c;
 }
 
@@ -203,7 +205,7 @@ function autoStops(choice, scale, counts, capOf) {
 function regsToList(regsObj) {
   return Object.entries(regsObj || {})
     .map(([id, r]) => ({ id, ...r }))
-    .filter((r) => r && r.stops && r.stops.length === 3)
+    .filter((r) => r && ((r.stops && r.stops.length === 3) || r.office))
     .sort((a, b) => a.seq - b.seq);
 }
 
@@ -329,6 +331,8 @@ function Register({ settings, onDone }) {
     if (color !== null && BUDGET.includes(color) && color !== scaleFlavor(s)) setColor(null);
   }
 
+  const isOffice = school.trim() === OFFICE_SCHOOL;
+
   async function submit() {
     const s = school.trim(), n = name.trim();
     const p = phone.replace(/[^0-9]/g, "");
@@ -339,6 +343,33 @@ function Register({ settings, onDone }) {
     }
     if (!n) { setErr("이름을 입력해 주세요."); return; }
     if (p.length < 10 || p.length > 11) { setErr("연락처를 정확히 입력해 주세요. (숫자 10~11자리)"); return; }
+    if (isOffice) {
+      // 교육청: 스쿱 배정 없이 순번만 발급받고 예비 테이블로
+      setBusy(true); setErr("");
+      try {
+        let seq = null;
+        for (let attempt = 0; attempt < 7 && seq === null; attempt++) {
+          const { etag, data: st } = await dbGetEtag("state");
+          const next = ((st && st.seq) || 0) + 1;
+          const status = await dbPutIfMatch("state", etag, {
+            seq: next, counts: (st && st.counts) || emptyCounts(),
+          });
+          if (status === 200) seq = next;
+          else if (status === 412) await new Promise((r) => setTimeout(r, 150 + Math.random() * 400));
+          else throw new Error("save " + status);
+        }
+        if (seq === null) { setErr("등록이 몰리고 있어요. 잠시 후 다시 시도해 주세요."); setBusy(false); return; }
+        const id = await dbPush("regs", {
+          school: s, name: n, phone: p, office: true, seq, ts: { ".sv": "timestamp" },
+        });
+        localStorage.setItem(LS_ME, JSON.stringify({ id, school: s, name: n }));
+        onDone();
+      } catch (e) {
+        setErr("저장에 실패했습니다. 네트워크를 확인하고 다시 시도해 주세요.");
+      }
+      setBusy(false);
+      return;
+    }
     if (!scale) { setErr("우리 학교 예산 규모를 먼저 골라 주세요."); return; }
     if (color === null) { setErr("꼭 담고 싶은 주제를 골라 주세요."); return; }
     if (BUDGET.includes(color) && color !== scaleFlavor(scale)) {
@@ -439,6 +470,16 @@ function Register({ settings, onDone }) {
           발송 후 즉시 파기됩니다. 화면·명단 어디에도 공개되지 않습니다.
         </p>
 
+        {isOffice && (
+          <div className="mt-5 px-4 py-4 text-xs leading-relaxed" style={{ background: CHIP, border: `2px solid ${LINE_SOFT}`, borderRadius: 20, color: MUTED }}>
+            <b style={{ color: INK }}>🏛️ 교육청 소속 안내</b><br />
+            교육청 참석자는 스쿱 라운드(1·2·3스쿱)에 참여하지 않습니다.
+            입장 후 <b style={{ color: INK }}>러너가 깔리지 않은 예비 테이블</b>로 안내되며, 행사 내내 예비 테이블에 자리해 주세요.
+            <b style={{ color: INK }}> 교육청 전용 럭키드로우</b>에 자동 응모됩니다.
+          </div>
+        )}
+
+        {!isOffice && (<>
         <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>
           ① 우리 학교 선도학교 예산 규모 <span style={{ color: FAINT }}>(예산 스쿱이 이걸로 정해져요)</span>
         </label>
@@ -486,13 +527,14 @@ function Register({ settings, onDone }) {
         <p className="mt-2.5 text-[11px] leading-relaxed" style={{ color: FAINT }}>
           연보라 디선당(FAQ 상담 · {DANG.host})은 상시 오픈 부스라 선택지에 없어요. 어느 라운드든 배정 자리 대신 방문할 수 있습니다.
         </p>
+        </>)}
 
         {err && <p className="mt-4 px-4 py-2.5 text-sm font-bold" style={{ background: "#FDEAE4", color: DANGER, borderRadius: 16 }}>{err}</p>}
 
         <button onClick={submit} disabled={busy}
           className="mt-5 w-full py-3.5 text-base font-black text-white transition-transform active:scale-95"
           style={{ background: busy ? FAINT : CORAL, borderRadius: 999, boxShadow: SHADOW }}>
-          {busy ? "배정 중…" : "등록하고 3스쿱 받기 🍨"}
+          {busy ? "배정 중…" : isOffice ? "참관 등록하기 🏛️" : "등록하고 3스쿱 받기 🍨"}
         </button>
         <p className="mt-3 text-center text-[11px] font-extrabold" style={{ color: DANGER }}>
           등록하면 자리가 확정되며 변경할 수 없습니다.
@@ -564,6 +606,30 @@ function MySeat({ goRegister }) {
     );
   }
 
+  if (mine.office) {
+    return (
+      <section className="mx-auto max-w-lg">
+        <div className="p-6 text-center" style={card({ border: `3px solid ${CORAL}` })}>
+          <div className="text-5xl">🏛️</div>
+          <div className="mt-3 text-4xl font-black tabular-nums" style={{ color: CORAL }}>
+            {mine.seq}<span className="ml-1 text-base font-extrabold" style={{ color: FAINT }}>번</span>
+          </div>
+          <div className="mt-1 text-sm font-extrabold" style={{ color: MUTED }}>{mine.school} · {mine.name}</div>
+          <p className="mt-5 px-4 py-3 text-sm font-extrabold leading-relaxed" style={{ background: CHIP, color: INK, borderRadius: 18 }}>
+            러너가 깔리지 않은 <b style={{ color: CORAL }}>예비 테이블</b>로 안내해 드립니다.
+            <br />행사 내내 예비 테이블에 자리해 주세요.
+          </p>
+          <p className="mt-2.5 px-4 py-3 text-xs leading-relaxed" style={{ background: "#FDEAE4", color: DANGER, borderRadius: 18 }}>
+            교육청 참석자는 스쿱 라운드(1·2·3스쿱) 테이블에 앉지 않습니다.
+          </p>
+          <p className="mt-2.5 px-4 py-3 text-xs leading-relaxed" style={{ background: CHIP, color: MUTED, borderRadius: 18 }}>
+            🎁 교육청 전용 럭키드로우에 자동 응모되었습니다. 결과는 [럭키드로우] 탭에서 확인하세요.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="mx-auto max-w-2xl">
       <div className="p-6" style={card({ border: `3px solid ${CORAL}` })}>
@@ -629,7 +695,7 @@ function Roster({ active }) {
   const [round, setRound] = useState(0);
   const regsObj = usePolled("regs", 5000, active, {});
   const regs = useMemo(() => regsToList(regsObj), [regsObj]);
-  const list = useMemo(() => regs.filter((r) => r.stops[round] === flavor), [regs, flavor, round]);
+  const list = useMemo(() => regs.filter((r) => r.stops && r.stops[round] === flavor), [regs, flavor, round]);
   const f = FLAVORS[flavor];
 
   const pill = (on) => ({
@@ -863,7 +929,9 @@ function DrawBoard({ active }) {
                       background: CHIP, border: `2px solid ${LINE_SOFT}`, borderRadius: 999, color: INK,
                       animation: di === 0 ? `chippop .45s ${(ti * 0.5 + wi * 0.06).toFixed(2)}s both` : "none",
                     }}>
-                    <span className="h-3 w-3 rounded-full" style={{ ...dotBg(FLAVORS[w.table]), border: `1.5px solid ${CORAL}` }} />
+                    {w.table == null
+                      ? <span className="text-[11px]">🏛️</span>
+                      : <span className="h-3 w-3 rounded-full" style={{ ...dotBg(FLAVORS[w.table]), border: `1.5px solid ${CORAL}` }} />}
                     {w.seq}번 {w.name} {w.school ? <span style={{ color: FAINT }}>· {w.school}</span> : null}
                   </span>
                 ))}
@@ -871,7 +939,9 @@ function DrawBoard({ active }) {
             </div>
           ))}
           <p className="mt-3.5 text-[11px] font-bold" style={{ color: FAINT }}>
-            색 점 = 3스쿱(마지막) 테이블. 리플렛의 스티커 3장을 보여주고 경품을 받아 가세요.
+            {d.office
+              ? "🏛️ 교육청 전용 추첨입니다. 당첨되신 분은 운영진에게 안내받아 주세요."
+              : "색 점 = 3스쿱(마지막) 테이블. 리플렛의 스티커 3장을 보여주고 경품을 받아 가세요."}
           </p>
         </div>
       ))}
@@ -892,6 +962,7 @@ function Admin({ active }) {
   const [baseCap, setBaseCap] = useState(20);
   const [perTable, setPerTable] = useState(12);
   const [tierText, setTierText] = useState(EV.tierDefault);
+  const [officeTierText, setOfficeTierText] = useState("교육청 럭키드로우 경품,2");
   const [msg, setMsg] = useState("");
   const loaded = useRef(false);
   useEffect(() => {
@@ -901,6 +972,7 @@ function Admin({ active }) {
     if (settings.baseCap) setBaseCap(settings.baseCap);
     if (settings.perTable) setPerTable(settings.perTable);
     if (settings.tierText) setTierText(settings.tierText);
+    if (settings.officeTierText) setOfficeTierText(settings.officeTierText);
   }, [settings]);
 
   const ADMIN_PW = (settings && settings.adminPw) || "digital31";
@@ -933,18 +1005,22 @@ function Admin({ active }) {
   function note(t) { setMsg(t); setTimeout(() => setMsg(""), 4000); }
 
   async function saveSettings() {
-    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, perTable: Number(perTable) || 12, tierText });
+    await dbPatch("settings", { schools, baseCap: Number(baseCap) || 20, perTable: Number(perTable) || 12, tierText, officeTierText });
     note("설정을 저장했습니다.");
   }
 
-  async function runDraw() {
-    const tiers = tierText.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+  function parseTiers(text) {
+    return text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
       const [name, n] = l.split(",");
       return { name: (name || "").trim(), count: parseInt(n, 10) || 0 };
     }).filter((t) => t.name && t.count > 0);
+  }
+
+  async function runDraw() {
+    const tiers = parseTiers(tierText);
     if (!tiers.length) { note("등수별 인원을 입력해 주세요. (예: 1등 키보드,20)"); return; }
 
-    let pool = regs.filter((r) => !prevWinnerIds.has(r.id));
+    let pool = regs.filter((r) => !r.office && !prevWinnerIds.has(r.id));
     if (!pool.length) { note("추첨 대상(미당첨 등록자)이 없습니다."); return; }
     const need = tiers.reduce((a, t) => a + t.count, 0);
     if (!confirm(`미당첨 등록자 ${pool.length}명 중 ${need}명을 추첨합니다. 실행할까요?`)) return;
@@ -973,6 +1049,29 @@ function Admin({ active }) {
     note("추첨 완료! ‘럭키드로우’ 탭으로 이동하면 두구두구 연출 후 명단이 공개됩니다. 🥁");
   }
 
+  /* 교육청 전용 추첨 — 교육청 등록자끼리만, 테이블 배당 없이 무작위 */
+  async function runOfficeDraw() {
+    const tiers = parseTiers(officeTierText);
+    if (!tiers.length) { note("교육청 경품·인원을 입력해 주세요. (예: 경품명,2)"); return; }
+    let pool = regs.filter((r) => r.office && !prevWinnerIds.has(r.id));
+    if (!pool.length) { note("교육청 추첨 대상(미당첨 등록자)이 없습니다."); return; }
+    const need = tiers.reduce((a, t) => a + t.count, 0);
+    if (!confirm(`교육청 미당첨 등록자 ${pool.length}명 중 ${need}명을 추첨합니다. 실행할까요?`)) return;
+    pool = pool.slice().sort(() => Math.random() - 0.5);
+    const result = tiers.map((t) => ({ name: t.name, winners: [] }));
+    tiers.forEach((t, ti) => {
+      while (result[ti].winners.length < t.count && pool.length) {
+        const w = pool.shift();
+        result[ti].winners.push({ id: w.id, seq: w.seq, name: w.name, school: w.school || "", phone: w.phone || "", table: null });
+      }
+    });
+    await dbPush("draws", {
+      label: `교육청 추첨 ${new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`,
+      office: true, tiers: result, ts: { ".sv": "timestamp" },
+    });
+    note("교육청 추첨 완료! ‘럭키드로우’ 탭에서 연출 후 공개됩니다. 🥁");
+  }
+
   function dlCsv(rows, filename) {
     const bom = "﻿";
     const blob = new Blob([bom + rows.map((r) => r.join(",")).join("\n")], { type: "text/csv" });
@@ -984,15 +1083,16 @@ function Admin({ active }) {
     dlCsv([
       ["순번", "학교", "이름", "연락처", "예산규모", "1스쿱", "2스쿱", "3스쿱", "1스쿱주제", "2스쿱주제", "3스쿱주제"],
       ...regs.map((r) => [r.seq, r.school || "", r.name, r.phone || "",
-        r.budget === "high" ? "1000만원 초과" : "1000만원 이내",
-        ...r.stops.map((f) => `${FLAVORS[f].name}(${FLAVORS[f].cname})`),
-        ...r.stops.map((f) => FLAVORS[f].topic.replace(/,/g, " "))]),
+        r.office ? "교육청(예비 테이블)" : r.budget === "high" ? "1000만원 초과" : "1000만원 이내",
+        ...(r.stops ? r.stops.map((f) => `${FLAVORS[f].name}(${FLAVORS[f].cname})`) : ["-", "-", "-"]),
+        ...(r.stops ? r.stops.map((f) => FLAVORS[f].topic.replace(/,/g, " ")) : ["-", "-", "-"])]),
     ], "등록명단.csv");
   }
   function exportWinners() {
     const rows = [["추첨", "등수", "순번", "이름", "학교", "연락처", "3스쿱테이블"]];
     Object.values(draws || {}).forEach((d) => (d.tiers || []).forEach((t) =>
-      (t.winners || []).forEach((w) => rows.push([d.label, t.name, w.seq, w.name, w.school, w.phone || "", FLAVORS[w.table].name]))));
+      (t.winners || []).forEach((w) => rows.push([d.label, t.name, w.seq, w.name, w.school, w.phone || "",
+        w.table == null ? "교육청(예비 테이블)" : FLAVORS[w.table].name]))));
     dlCsv(rows, "당첨자.csv");
   }
 
@@ -1012,7 +1112,9 @@ function Admin({ active }) {
       <div className="p-5" style={card()}>
         <h2 className="text-base font-black" style={{ color: CORAL }}>현황</h2>
         <p className="mt-1.5 text-sm" style={{ color: MUTED }}>
-          등록 <b style={{ color: INK }}>{regs.length}명</b> · 현재 라운드당 정원 <b style={{ color: INK }}>{ci.roundCap}명</b>
+          등록 <b style={{ color: INK }}>{regs.length}명</b>
+          {regs.some((r) => r.office) && <> (교육청 예비 테이블 <b style={{ color: INK }}>{regs.filter((r) => r.office).length}명</b> 포함)</>}
+          {" · "}현재 라운드당 정원 <b style={{ color: INK }}>{ci.roundCap}명</b>
           {ci.level > 0 && ` (자동 상향 +${ci.level * 2})`}
         </p>
         <div className="mt-3 overflow-x-auto">
@@ -1068,14 +1170,29 @@ function Admin({ active }) {
       <div className="p-5" style={card()}>
         <h2 className="text-base font-black" style={{ color: CORAL }}>럭키 드로우</h2>
         <p className="mt-1.5 text-xs leading-relaxed" style={{ color: MUTED }}>
-          등록자 전체(기존 당첨자 제외)를 대상으로 일괄 추첨하고, 당첨자를 3스쿱 테이블별로 고르게 배당합니다.
+          스쿱 등록자 전체(교육청·기존 당첨자 제외)를 대상으로 일괄 추첨하고, 당첨자를 3스쿱 테이블별로 고르게 배당합니다.
           실행하면 럭키드로우 탭에서 <b>12초 두구두구 드럼롤 연출 후</b> 명단이 공개돼요 (메인 스크린은 미리 럭키드로우 탭을 띄워 두세요).
-          재추첨하면 이전 당첨자는 자동 제외됩니다. 미당첨 등록자 {regs.length - prevWinnerIds.size}명.
+          재추첨하면 이전 당첨자는 자동 제외됩니다.
         </p>
         <button onClick={runDraw} className="mt-3.5 px-5 py-2.5 text-sm font-black text-white"
           style={{ background: "#A07FD0", borderRadius: 999, boxShadow: "0 10px 24px rgba(160,127,208,.25)" }}>
           🎁 추첨 실행
         </button>
+
+        <div className="mt-5 pt-4" style={{ borderTop: `2px dashed ${LINE_SOFT}` }}>
+          <h3 className="text-sm font-black" style={{ color: INK }}>🏛️ 교육청 전용 추첨</h3>
+          <p className="mt-1.5 text-xs leading-relaxed" style={{ color: MUTED }}>
+            교육청(예비 테이블) 등록자끼리만 따로 추첨합니다. 일반 추첨과 대상이 겹치지 않아요.
+            현재 교육청 등록 {regs.filter((r) => r.office).length}명.
+          </p>
+          <label className="mt-2.5 block text-xs font-extrabold" style={{ color: MUTED }}>교육청 경품·인원 (한 줄에 “이름,인원”)</label>
+          <textarea value={officeTierText} onChange={(e) => setOfficeTierText(e.target.value)} rows={2}
+            className="mt-1.5 w-full px-4 py-2.5 text-sm outline-none focus:ring-2" style={input} />
+          <button onClick={runOfficeDraw} className="mt-2.5 px-5 py-2.5 text-sm font-black text-white"
+            style={{ background: CORAL, borderRadius: 999, boxShadow: SHADOW }}>
+            🏛️ 교육청 추첨 실행
+          </button>
+        </div>
       </div>
 
       <div className="p-5" style={card()}>
