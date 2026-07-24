@@ -303,6 +303,7 @@ function Ring({ stops, size = 250 }) {
 function Register({ settings, onDone }) {
   const [school, setSchool] = useState("");
   const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
   const [scale, setScale] = useState(null); // "low" 1,000만원 이내 · "high" 초과
   const [color, setColor] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -330,7 +331,9 @@ function Register({ settings, onDone }) {
 
   async function submit() {
     const s = school.trim(), n = name.trim();
+    const p = phone.replace(/[^0-9]/g, "");
     if (!n) { setErr("이름을 입력해 주세요."); return; }
+    if (p.length < 10 || p.length > 11) { setErr("연락처를 정확히 입력해 주세요. (숫자 10~11자리)"); return; }
     if (!scale) { setErr("우리 학교 예산 규모를 먼저 골라 주세요."); return; }
     if (color === null) { setErr("꼭 담고 싶은 주제를 골라 주세요."); return; }
     if (BUDGET.includes(color) && color !== scaleFlavor(scale)) {
@@ -363,7 +366,7 @@ function Register({ settings, onDone }) {
       }
       if (!assigned) { setErr("등록이 몰리고 있어요. 잠시 후 다시 시도해 주세요."); setBusy(false); return; }
       const id = await dbPush("regs", {
-        school: s, name: n, budget: scale, stops: assigned.stops, seq: assigned.seq, ts: { ".sv": "timestamp" },
+        school: s, name: n, phone: p, budget: scale, stops: assigned.stops, seq: assigned.seq, ts: { ".sv": "timestamp" },
       });
       localStorage.setItem(LS_ME, JSON.stringify({ id, school: s, name: n }));
       onDone();
@@ -413,6 +416,16 @@ function Register({ settings, onDone }) {
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름 입력"
           className="mt-1.5 w-full px-4 py-3 text-base font-bold outline-none focus:ring-2"
           style={input} />
+
+        <label className="mt-4 block text-xs font-extrabold" style={{ color: MUTED }}>연락처</label>
+        <input type="tel" inputMode="numeric" value={phone} onChange={(e) => setPhone(e.target.value)}
+          placeholder="010-0000-0000"
+          className="mt-1.5 w-full px-4 py-3 text-base font-bold outline-none focus:ring-2"
+          style={input} />
+        <p className="mt-1.5 text-[11px] leading-relaxed" style={{ color: FAINT }}>
+          🔒 연락처는 <b style={{ color: MUTED }}>럭키드로우 당첨 시 기프티콘 발송에만 사용</b>하며,
+          발송 후 즉시 파기됩니다. 화면·명단 어디에도 공개되지 않습니다.
+        </p>
 
         <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>
           ① 우리 학교 선도학교 예산 규모 <span style={{ color: FAINT }}>(예산 스쿱이 이걸로 정해져요)</span>
@@ -936,7 +949,7 @@ function Admin({ active }) {
         tables.sort((a, b) => b.g.length - a.g.length);
         const slot = tables[0];
         const w = slot.g.shift();
-        result[ti].winners.push({ id: w.id, seq: w.seq, name: w.name, school: w.school || "", table: w.stops[2] });
+        result[ti].winners.push({ id: w.id, seq: w.seq, name: w.name, school: w.school || "", phone: w.phone || "", table: w.stops[2] });
         tables = tables.filter((x) => x.g.length);
       }
     });
@@ -957,17 +970,17 @@ function Admin({ active }) {
   }
   function exportRegs() {
     dlCsv([
-      ["순번", "학교", "이름", "예산규모", "1스쿱", "2스쿱", "3스쿱", "1스쿱주제", "2스쿱주제", "3스쿱주제"],
-      ...regs.map((r) => [r.seq, r.school || "", r.name,
+      ["순번", "학교", "이름", "연락처", "예산규모", "1스쿱", "2스쿱", "3스쿱", "1스쿱주제", "2스쿱주제", "3스쿱주제"],
+      ...regs.map((r) => [r.seq, r.school || "", r.name, r.phone || "",
         r.budget === "high" ? "1000만원 초과" : "1000만원 이내",
         ...r.stops.map((f) => `${FLAVORS[f].name}(${FLAVORS[f].cname})`),
         ...r.stops.map((f) => FLAVORS[f].topic.replace(/,/g, " "))]),
     ], "등록명단.csv");
   }
   function exportWinners() {
-    const rows = [["추첨", "등수", "순번", "이름", "학교", "3스쿱테이블"]];
+    const rows = [["추첨", "등수", "순번", "이름", "학교", "연락처", "3스쿱테이블"]];
     Object.values(draws || {}).forEach((d) => (d.tiers || []).forEach((t) =>
-      (t.winners || []).forEach((w) => rows.push([d.label, t.name, w.seq, w.name, w.school, FLAVORS[w.table].name]))));
+      (t.winners || []).forEach((w) => rows.push([d.label, t.name, w.seq, w.name, w.school, w.phone || "", FLAVORS[w.table].name]))));
     dlCsv(rows, "당첨자.csv");
   }
 
@@ -1061,7 +1074,10 @@ function Admin({ active }) {
           <button onClick={resetAll} className="px-4 py-2.5 text-sm font-extrabold"
             style={{ background: "#FDEAE4", color: DANGER, borderRadius: 999, border: "2px solid #F6C4BB" }}>전체 초기화</button>
         </div>
-        <p className="mt-2.5 text-[11px]" style={{ color: FAINT }}>행사 전 시험 등록분은 ‘전체 초기화’로 반드시 비워 주세요.</p>
+        <p className="mt-2.5 text-[11px] leading-relaxed" style={{ color: FAINT }}>
+          행사 전 시험 등록분은 ‘전체 초기화’로 반드시 비워 주세요.
+          <br />🔒 연락처는 기프티콘 발송에만 사용하기로 안내되어 있습니다 —
+          발송이 끝나면 <b style={{ color: MUTED }}>CSV 파일을 지우고 ‘전체 초기화’를 실행해 연락처를 파기</b>해 주세요.</p>
       </div>
     </section>
   );
