@@ -487,6 +487,9 @@ function Register({ settings, onDone }) {
           <b style={{ color: INK }}>고른 주제와 예산 스쿱은 세 라운드 중 꼭 한 번씩</b> 들어가고,
           보고서 스쿱도 1개 이상 담깁니다. 순서(라운드)는 붐비지 않게 자동으로 정해져요.
         </p>
+        <p className="mt-2 rounded-xl px-3 py-2 text-[11px] leading-relaxed" style={{ background: CHIP, color: MUTED }}>
+          💡 배정은 각자 개별로 이루어져, <b style={{ color: INK }}>같은 학교 선생님이라도 서로 다른 테이블에서 듣게 될 수 있어요.</b> 자기 화면의 자리를 따라가 주세요.
+        </p>
 
         <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>
           소속 학교(기관) <span style={{ color: DANGER }}>— 선도학교 명단에서 선택</span>
@@ -727,6 +730,7 @@ function MySeat({ goRegister }) {
         </p>
         <p className="mt-2.5 px-4 py-3 text-xs leading-relaxed" style={{ background: CHIP, color: MUTED, borderRadius: 18 }}>
           1스쿱 자리에 앉아 시작하고, 라운드가 바뀔 때마다 이 화면을 다시 열어 다음 자리를 확인하세요.
+          <br />같은 학교 선생님과 <b style={{ color: INK }}>다른 테이블</b>로 나뉠 수 있으니, 꼭 <b style={{ color: INK }}>내 화면의 자리</b>를 따라가 주세요.
         </p>
       </div>
     </section>
@@ -1012,8 +1016,13 @@ function Admin({ active }) {
   const settings = usePolled("settings", 15000, active && ok, {});
   const regsObj = usePolled("regs", 5000, active && ok, {});
   const draws = usePolled("draws", 8000, active && ok, {});
+  const given = usePolled("given", 5000, active && ok, {});
   const regs = useMemo(() => regsToList(regsObj), [regsObj]);
+  const regById = useMemo(() => {
+    const m = {}; regs.forEach((r) => { m[r.id] = r; }); return m;
+  }, [regs]);
 
+  const [regQuery, setRegQuery] = useState("");
   const [schools, setSchools] = useState("");
   const [baseCap, setBaseCap] = useState(20);
   const [tierText, setTierText] = useState(EV.tierDefault);
@@ -1164,18 +1173,27 @@ function Admin({ active }) {
         ...(r.stops ? r.stops.map((f) => FLAVORS[f].topic.replace(/,/g, " ")) : ["-", "-", "-"])]),
     ], "등록명단.csv");
   }
+  function scoopsOf(w) {
+    const r = regById[w.id];
+    if (r && r.stops) return r.stops.map((f) => `${FLAVORS[f].name}(${FLAVORS[f].cname})`);
+    return ["-", "-", "-"];
+  }
   function exportWinners() {
-    const rows = [["추첨", "등수", "순번", "이름", "학교", "연락처", "3스쿱테이블"]];
+    const rows = [["추첨", "등수", "순번", "이름", "학교", "연락처", "1스쿱", "2스쿱", "3스쿱", "수령여부"]];
     Object.values(draws || {}).forEach((d) => (d.tiers || []).forEach((t) =>
       (t.winners || []).forEach((w) => rows.push([d.label, t.name, w.seq, w.name, w.school, w.phone || "",
-        w.table == null ? "교육청(예비 테이블)" : FLAVORS[w.table].name]))));
+        ...(w.table == null ? ["교육청 예비", "-", "-"] : scoopsOf(w)),
+        given && given[w.id] ? "수령완료" : "미수령"]))));
     dlCsv(rows, "당첨자.csv");
+  }
+  async function toggleGiven(id) {
+    await dbPatch("given", { [id]: given && given[id] ? null : true });
   }
 
   async function resetAll() {
     if (!confirm("등록 명단과 추첨 결과를 전부 삭제합니다. 행사 시작 전 시험 데이터 정리용입니다. 계속할까요?")) return;
     if (!confirm("정말 삭제할까요? 되돌릴 수 없습니다.")) return;
-    await dbDelete("regs"); await dbDelete("draws"); await dbDelete("state");
+    await dbDelete("regs"); await dbDelete("draws"); await dbDelete("state"); await dbDelete("given");
     note("초기화했습니다.");
   }
 
@@ -1213,6 +1231,50 @@ function Admin({ active }) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* 전체 등록 명단 */}
+      <div className="p-5" style={card()}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-base font-black" style={{ color: CORAL }}>등록 명단 <span style={{ color: FAINT }}>({regs.length}명)</span></h2>
+          <button onClick={exportRegs} className="px-4 py-2 text-xs font-extrabold" style={btnGhost}>⬇ 등록 명단 CSV</button>
+        </div>
+        <input value={regQuery} onChange={(e) => setRegQuery(e.target.value)} placeholder="이름·학교로 검색"
+          className="mt-3 w-full px-4 py-2.5 text-sm font-bold outline-none focus:ring-2" style={input} />
+        {(() => {
+          const q = regQuery.trim();
+          const list = q ? regs.filter((r) => (r.name + " " + (r.school || "")).includes(q)) : regs;
+          return (
+            <div className="mt-3 max-h-96 overflow-auto rounded-xl" style={{ border: `1px solid ${LINE_SOFT}` }}>
+              <table className="w-full text-left text-xs">
+                <thead className="sticky top-0"><tr>
+                  {["순번", "이름", "학교", "연락처", "1·2·3스쿱"].map((h) => (
+                    <th key={h} className="whitespace-nowrap px-2 py-2 font-extrabold" style={{ color: FAINT, background: CHIP }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {list.map((r) => (
+                    <tr key={r.id} style={{ borderTop: `1px dashed ${LINE_SOFT}` }}>
+                      <td className="px-2 py-1.5 font-black tabular-nums" style={{ color: CORAL }}>{r.seq}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 font-extrabold" style={{ color: INK }}>{r.name}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5" style={{ color: MUTED }}>{r.school || "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5 tabular-nums" style={{ color: MUTED }}>{r.phone || "—"}</td>
+                      <td className="whitespace-nowrap px-2 py-1.5">
+                        {r.office
+                          ? <span style={{ color: "#A07FD0", fontWeight: 800 }}>🏛️ 예비</span>
+                          : (r.stops || []).map((f, i) => (
+                            <span key={i} title={FLAVORS[f].cname} className="mr-0.5 inline-block h-3.5 w-3.5 translate-y-0.5 rounded-full"
+                              style={{ ...dotBg(FLAVORS[f]), border: `1.5px solid ${CORAL}` }} />
+                          ))}
+                      </td>
+                    </tr>
+                  ))}
+                  {!list.length && <tr><td colSpan={5} className="px-2 py-6 text-center font-bold" style={{ color: FAINT }}>일치하는 등록자가 없어요.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="p-5" style={card()}>
@@ -1265,6 +1327,82 @@ function Admin({ active }) {
           </button>
         </div>
       </div>
+
+      {/* 당첨자 확인 (경품 지급용) */}
+      {(() => {
+        const drawList = Object.entries(draws || {}).sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+        const totalWinners = drawList.reduce((a, [, d]) => a + (d.tiers || []).reduce((x, t) => x + (t.winners || []).length, 0), 0);
+        const givenCount = Object.values(given || {}).filter(Boolean).length;
+        return (
+          <div className="p-5" style={card()}>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-black" style={{ color: CORAL }}>당첨자 확인 <span style={{ color: FAINT }}>(경품 지급)</span></h2>
+              <button onClick={exportWinners} className="px-4 py-2 text-xs font-extrabold" style={btnGhost}>⬇ 당첨자 CSV</button>
+            </div>
+            {!drawList.length ? (
+              <p className="mt-3 px-4 py-6 text-center text-sm font-bold" style={{ background: CHIP, color: FAINT, borderRadius: 16 }}>아직 추첨 결과가 없어요.</p>
+            ) : (
+              <>
+                <p className="mt-1.5 text-xs" style={{ color: MUTED }}>
+                  당첨 {totalWinners}명 · 수령 완료 <b style={{ color: OK_FG }}>{givenCount}</b>명.
+                  색 점 = 3스쿱 — 참가자 리플렛의 스티커 3장과 대조하고 [지급] 버튼으로 체크하세요.
+                </p>
+                <div className="mt-3 space-y-4">
+                  {drawList.map(([id, d]) => (
+                    <div key={id}>
+                      <div className="text-xs font-black" style={{ color: d.office ? "#A07FD0" : INK }}>{d.office ? "🏛️ " : "🎁 "}{d.label}</div>
+                      {(d.tiers || []).map((t, ti) => (
+                        <div key={ti} className="mt-2">
+                          <div className="text-[11px] font-extrabold" style={{ color: MUTED }}>{t.name} ({(t.winners || []).length}명)</div>
+                          {!(t.winners || []).length ? (
+                            <p className="mt-1 px-3 py-2 text-[11px]" style={{ background: CHIP, color: FAINT, borderRadius: 10 }}>당첨자 없음</p>
+                          ) : (
+                          <div className="mt-1 overflow-x-auto rounded-lg" style={{ border: `1px solid ${LINE_SOFT}` }}>
+                            <table className="w-full text-left text-xs">
+                              <tbody>
+                                {t.winners.map((w) => {
+                                  const g = given && given[w.id];
+                                  const r = regById[w.id];
+                                  return (
+                                    <tr key={w.id} style={{ borderTop: `1px dashed ${LINE_SOFT}`, background: g ? OK_BG : "transparent" }}>
+                                      <td className="px-2 py-1.5 font-black tabular-nums" style={{ color: CORAL }}>{w.seq}</td>
+                                      <td className="whitespace-nowrap px-2 py-1.5 font-extrabold" style={{ color: INK }}>{w.name}</td>
+                                      <td className="whitespace-nowrap px-2 py-1.5" style={{ color: MUTED }}>{w.school || "—"}</td>
+                                      <td className="whitespace-nowrap px-2 py-1.5 tabular-nums" style={{ color: MUTED }}>{w.phone || "—"}</td>
+                                      <td className="whitespace-nowrap px-2 py-1.5">
+                                        {w.table == null
+                                          ? <span style={{ color: "#A07FD0", fontWeight: 800 }}>🏛️ 예비</span>
+                                          : (r && r.stops ? r.stops : [w.table]).map((f, i) => (
+                                            <span key={i} title={FLAVORS[f].cname} className="mr-0.5 inline-block h-3.5 w-3.5 translate-y-0.5 rounded-full"
+                                              style={{ ...dotBg(FLAVORS[f]), border: `1.5px solid ${CORAL}` }} />
+                                          ))}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-right">
+                                        <button onClick={() => toggleGiven(w.id)}
+                                          className="px-2.5 py-1 text-[11px] font-black"
+                                          style={g
+                                            ? { background: OK_FG, color: "#fff", borderRadius: 999 }
+                                            : { background: CARD, color: MUTED, border: `1.5px solid ${LINE_SOFT}`, borderRadius: 999 }}>
+                                          {g ? "✓ 지급완료" : "지급"}
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="p-5" style={card()}>
         <h2 className="text-base font-black" style={{ color: CORAL }}>데이터</h2>
