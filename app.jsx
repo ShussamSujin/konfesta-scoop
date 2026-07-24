@@ -325,7 +325,8 @@ function Register({ settings, onDone }) {
     if (color !== null && BUDGET.includes(color) && color !== scaleFlavor(s)) setColor(null);
   }
 
-  const isOffice = school.trim() === OFFICE_SCHOOL;
+  // 교육청 트랙은 교육청이 학교 목록에 있는 행사(초등)에서만 활성화
+  const isOffice = school.trim() === OFFICE_SCHOOL && schools.includes(OFFICE_SCHOOL);
 
   async function submit() {
     const s = school.trim(), n = name.trim();
