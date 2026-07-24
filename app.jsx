@@ -106,8 +106,10 @@ const FLAVORS = FLAVOR_BASE.map((f, i) => ({
 }));
 const N = FLAVORS.length; // 7
 const DANG = { color: "#C6ADE8", cname: "연보라", name: "라벤더 허니", host: EV.dangHost, topic: "용한 디선당 · FAQ 상담 (상시 오픈)" };
-/* 교육청 소속: 스쿱 라운드 없이 예비 테이블에 주둔, 전용 럭키드로우 */
-const OFFICE_SCHOOL = "서울시교육청";
+/* 교육청 소속: 스쿱 라운드 없이 예비 테이블에 주둔, 전용 럭키드로우.
+   아래 9명만 교육청 소속으로 등록·추첨 가능 */
+const OFFICE_SCHOOL = "서울특별시교육청";
+const OFFICE_MEMBERS = ["김남희", "이봉용", "이은상", "오정은", "최영진", "강윤지", "최정엽", "권이혁", "정윤주"];
 const BUDGET = [0, 1];
 const REPORT = [2, 3, 4, 5];
 const NONBUDGET = [2, 3, 4, 5, 6];
@@ -344,7 +346,11 @@ function Register({ settings, onDone }) {
     if (!n) { setErr("이름을 입력해 주세요."); return; }
     if (p.length < 10 || p.length > 11) { setErr("연락처를 정확히 입력해 주세요. (숫자 10~11자리)"); return; }
     if (isOffice) {
-      // 교육청: 스쿱 배정 없이 순번만 발급받고 예비 테이블로
+      // 교육청: 참석 명단 9명만 등록 가능, 스쿱 배정 없이 순번만 발급받고 예비 테이블로
+      if (!OFFICE_MEMBERS.includes(n)) {
+        setErr("서울특별시교육청 참석 명단(9명)에 없는 이름입니다. 이름을 다시 확인해 주세요.");
+        return;
+      }
       setBusy(true); setErr("");
       try {
         let seq = null;
@@ -475,7 +481,6 @@ function Register({ settings, onDone }) {
             <b style={{ color: INK }}>🏛️ 교육청 소속 안내</b><br />
             교육청 참석자는 스쿱 라운드(1·2·3스쿱)에 참여하지 않습니다.
             입장 후 <b style={{ color: INK }}>러너가 깔리지 않은 예비 테이블</b>로 안내되며, 행사 내내 예비 테이블에 자리해 주세요.
-            <b style={{ color: INK }}> 교육청 전용 럭키드로우</b>에 자동 응모됩니다.
           </div>
         )}
 
@@ -557,7 +562,7 @@ function MySeat({ goRegister }) {
         const me = JSON.parse(localStorage.getItem(LS_ME) || "null");
         if (me && me.id) {
           const r = await dbGet(`regs/${me.id}`);
-          if (r && r.stops) { setMine({ id: me.id, ...r }); setLoading(false); return; }
+          if (r && (r.stops || r.office)) { setMine({ id: me.id, ...r }); setLoading(false); return; }
         }
       } catch {}
       setLoading(false);
@@ -621,9 +626,6 @@ function MySeat({ goRegister }) {
           </p>
           <p className="mt-2.5 px-4 py-3 text-xs leading-relaxed" style={{ background: "#FDEAE4", color: DANGER, borderRadius: 18 }}>
             교육청 참석자는 스쿱 라운드(1·2·3스쿱) 테이블에 앉지 않습니다.
-          </p>
-          <p className="mt-2.5 px-4 py-3 text-xs leading-relaxed" style={{ background: CHIP, color: MUTED, borderRadius: 18 }}>
-            🎁 교육청 전용 럭키드로우에 자동 응모되었습니다. 결과는 [럭키드로우] 탭에서 확인하세요.
           </p>
         </div>
       </section>
@@ -1053,8 +1055,8 @@ function Admin({ active }) {
   async function runOfficeDraw() {
     const tiers = parseTiers(officeTierText);
     if (!tiers.length) { note("교육청 경품·인원을 입력해 주세요. (예: 경품명,2)"); return; }
-    let pool = regs.filter((r) => r.office && !prevWinnerIds.has(r.id));
-    if (!pool.length) { note("교육청 추첨 대상(미당첨 등록자)이 없습니다."); return; }
+    let pool = regs.filter((r) => r.office && OFFICE_MEMBERS.includes(r.name) && !prevWinnerIds.has(r.id));
+    if (!pool.length) { note("교육청 추첨 대상(참석 명단 9명 중 미당첨 등록자)이 없습니다."); return; }
     const need = tiers.reduce((a, t) => a + t.count, 0);
     if (!confirm(`교육청 미당첨 등록자 ${pool.length}명 중 ${need}명을 추첨합니다. 실행할까요?`)) return;
     pool = pool.slice().sort(() => Math.random() - 0.5);
