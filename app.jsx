@@ -196,11 +196,23 @@ function autoStops(choice, scale, counts, capOf) {
   return stops;
 }
 
+/* state.counts 를 안전하게 읽기 (원자적 증가로 희소 배열/객체가 될 수 있음) */
+function readCounts(st) {
+  const src = (st && st.counts) || {};
+  return [0, 1, 2].map((r) => {
+    const row = src[r] || {};
+    return FLAVORS.map((_, f) => Number((row[f] != null ? row[f] : row[String(f)]) || 0));
+  });
+}
+
+/* 순번은 등록 순서(ts, 동률 시 키)로 매김 — 카운터 경합 없이 항상 고유·안정 */
 function regsToList(regsObj) {
-  return Object.entries(regsObj || {})
+  const list = Object.entries(regsObj || {})
     .map(([id, r]) => ({ id, ...r }))
     .filter((r) => r && ((r.stops && r.stops.length === 3) || r.office))
-    .sort((a, b) => a.seq - b.seq);
+    .sort((a, b) => ((Number(a.ts) || 0) - (Number(b.ts) || 0)) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  list.forEach((r, i) => { r.seq = i + 1; });
+  return list;
 }
 
 /* ── 배경 블롭 장식 ── */
@@ -357,10 +369,7 @@ function Register({ settings, onDone }) {
   const [err, setErr] = useState("");
   const state = usePolled("state", 5000, true, null);
 
-  const counts = useMemo(() => {
-    if (!state || !state.counts) return emptyCounts();
-    return state.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0));
-  }, [state]);
+  const counts = useMemo(() => readCounts(state), [state]);
   const ci = capInfo(counts, settings);
   // 자리별 총 정원 = 라운드당 정원 × 3라운드 (고른 주제는 세 라운드 중 한 번 들어가므로)
   const leftOf = (f) => Math.max(0, 3 * ci.capOf(f) - totalOf(counts, f));
@@ -390,24 +399,11 @@ function Register({ settings, onDone }) {
     if (!n) { setErr("이름을 입력해 주세요."); return; }
     if (p.length < 10 || p.length > 11) { setErr("연락처를 정확히 입력해 주세요. (숫자 10~11자리)"); return; }
     if (isOffice) {
-      // 교육청: 등록은 누구나 가능(스쿱 배정 없이 순번만 발급받고 예비 테이블로).
-      // 럭키드로우는 참석 명단 9명 중 등록자에게만 적용됨(운영 탭 교육청 추첨).
+      // 교육청: 스쿱 없이 예비 테이블. 단순 추가(push)뿐 — 경합 없음.
       setBusy(true); setErr("");
       try {
-        let seq = null;
-        for (let attempt = 0; attempt < 7 && seq === null; attempt++) {
-          const { etag, data: st } = await dbGetEtag("state");
-          const next = ((st && st.seq) || 0) + 1;
-          const status = await dbPutIfMatch("state", etag, {
-            seq: next, counts: (st && st.counts) || emptyCounts(),
-          });
-          if (status === 200) seq = next;
-          else if (status === 412) await new Promise((r) => setTimeout(r, 150 + Math.random() * 400));
-          else throw new Error("save " + status);
-        }
-        if (seq === null) { setErr("등록이 몰리고 있어요. 잠시 후 다시 시도해 주세요."); setBusy(false); return; }
         const id = await dbPush("regs", {
-          school: s, name: n, phone: p, office: true, seq, ts: { ".sv": "timestamp" },
+          school: s, name: n, phone: p, office: true, ts: { ".sv": "timestamp" },
         });
         localStorage.setItem(LS_ME, JSON.stringify({ id, school: s, name: n }));
         onDone();
@@ -424,33 +420,27 @@ function Register({ settings, onDone }) {
     }
     setBusy(true); setErr("");
     try {
-      let assigned = null;
-      for (let attempt = 0; attempt < 7 && !assigned; attempt++) {
-        const { etag, data: st } = await dbGetEtag("state");
-        const c = st && st.counts
-          ? st.counts.map((row) => FLAVORS.map((_, f) => (row && row[f]) || 0))
-          : emptyCounts();
-        const ciNow = capInfo(c, settings);
-        if (totalOf(c, scaleFlavor(scale)) >= 3 * ciNow.capOf(scaleFlavor(scale))) {
-          setErr("해당 예산 규모가 마감되었습니다. 운영진에게 문의해 주세요.");
-          setBusy(false); setScale(null); return;
-        }
-        if (totalOf(c, color) >= 3 * ciNow.capOf(color)) {
-          setErr("방금 그 주제가 마감되었습니다. 다른 주제를 골라 주세요.");
-          setBusy(false); setColor(null); return;
-        }
-        const stops = autoStops(color, scale, c, ciNow.capOf);
-        stops.forEach((f, i) => { c[i][f] += 1; });
-        const seq = ((st && st.seq) || 0) + 1;
-        const status = await dbPutIfMatch("state", etag, { seq, counts: c });
-        if (status === 200) assigned = { stops, seq };
-        else if (status === 412) await new Promise((r) => setTimeout(r, 150 + Math.random() * 400));
-        else throw new Error("save " + status);
+      // 잠금(재시도) 없이: 최근 스냅샷으로 마감 판정·배정 → 원자적 카운터 증가 → 독립 추가
+      // 수백 명이 동시에 눌러도 경합/재시도 폭주가 없다. 순번은 등록 순서로 자동 부여.
+      const st = await dbGet("state");
+      const c = readCounts(st);
+      const ciNow = capInfo(c, settings);
+      if (totalOf(c, scaleFlavor(scale)) >= 3 * ciNow.capOf(scaleFlavor(scale))) {
+        setErr("해당 예산 규모가 마감되었습니다. 운영진에게 문의해 주세요.");
+        setBusy(false); setScale(null); return;
       }
-      if (!assigned) { setErr("등록이 몰리고 있어요. 잠시 후 다시 시도해 주세요."); setBusy(false); return; }
+      if (totalOf(c, color) >= 3 * ciNow.capOf(color)) {
+        setErr("방금 그 주제가 마감되었습니다. 다른 주제를 골라 주세요.");
+        setBusy(false); setColor(null); return;
+      }
+      const stops = autoStops(color, scale, c, ciNow.capOf);
       const id = await dbPush("regs", {
-        school: s, name: n, phone: p, budget: scale, stops: assigned.stops, seq: assigned.seq, ts: { ".sv": "timestamp" },
+        school: s, name: n, phone: p, budget: scale, stops, ts: { ".sv": "timestamp" },
       });
+      // 배정된 3자리의 카운터를 원자적으로 +1 (경합 없이 합산 정확)
+      const patch = {};
+      stops.forEach((f, i) => { patch[`counts/${i}/${f}`] = { ".sv": { increment: 1 } }; });
+      dbPatch("state", patch).catch(() => {});
       localStorage.setItem(LS_ME, JSON.stringify({ id, school: s, name: n }));
       onDone();
     } catch (e) {
@@ -605,8 +595,9 @@ function MySeat({ goRegister }) {
       try {
         const me = JSON.parse(localStorage.getItem(LS_ME) || "null");
         if (me && me.id) {
-          const r = await dbGet(`regs/${me.id}`);
-          if (r && (r.stops || r.office)) { setMine({ id: me.id, ...r }); setLoading(false); return; }
+          // 순번은 등록 순서로 계산되므로 전체를 불러와 내 것을 찾는다 (조회 시 1회, 폴링 없음)
+          const found = regsToList(await dbGet("regs")).find((r) => r.id === me.id);
+          if (found) { setMine(found); setLoading(false); return; }
         }
       } catch {}
       setLoading(false);
