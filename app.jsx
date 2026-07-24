@@ -232,24 +232,75 @@ function DualDefs() {
 }
 const svgFill = (fi) => (FLAVORS[fi].color2 ? "url(#dualBudget)" : FLAVORS[fi].color);
 
-/* ── 콘 카드 (캔디 광택) ── */
+/* 작은 하트 (SVG) */
+function Heart({ x, y, s, fill }) {
+  const d = `M${x},${y + 0.72 * s} C${x - 1.05 * s},${y - 0.12 * s} ${x - 0.5 * s},${y - 0.82 * s} ${x},${y - 0.26 * s} C${x + 0.5 * s},${y - 0.82 * s} ${x + 1.05 * s},${y - 0.12 * s} ${x},${y + 0.72 * s} Z`;
+  return <path d={d} fill={fill} stroke="#fff" strokeWidth={s * 0.2} strokeLinejoin="round" />;
+}
+
+/* ── 콘 카드 (기능용 · 배정된 3스쿱 색 + 순번, 흘러내림·하트로 장식) ── */
 function Cone({ stops, size = 1 }) {
+  const hues = stops.map((fi) => FLAVORS[fi].color);
   return (
-    <svg viewBox="0 0 150 214" width={150 * size} height={214 * size} role="img" aria-label="3스쿱 콘">
+    <svg viewBox="0 0 150 224" width={150 * size} height={224 * size} role="img" aria-label="3스쿱 콘">
       <DualDefs />
-      <polygon points="45,126 105,126 75,202" fill="url(#wf)" stroke={CORAL} strokeWidth="3" strokeLinejoin="round" />
+      {/* 하트 (배정 색으로) */}
+      <Heart x={56} y={22} s={6} fill={hues[0]} />
+      <Heart x={75} y={15} s={7} fill={hues[1]} />
+      <Heart x={94} y={22} s={6} fill={hues[2]} />
+      {/* 콘 */}
+      <polygon points="45,128 105,128 75,206" fill="url(#wf)" stroke={CORAL} strokeWidth="3.5" strokeLinejoin="round" />
+      {/* 흘러내림 (콘 위, 스쿱 뒤) */}
+      <path d="M52,126 q7,17 1,28 q-9,-4 -7,-17 q-2,-7 6,-11 Z" fill={svgFill(stops[2])} stroke={CORAL} strokeWidth="2.5" strokeLinejoin="round" />
+      <path d="M98,126 q-7,15 -1,26 q10,-3 7,-16 q3,-6 -6,-10 Z" fill={svgFill(stops[2])} stroke={CORAL} strokeWidth="2.5" strokeLinejoin="round" />
       {[2, 1, 0].map((i) => {
-        const cy = [120, 85, 52][i], r = [36, 34, 31][i];
+        const cy = [122, 87, 54][i], r = [36, 34, 31][i];
         return (
           <g key={i}>
-            <circle cx="75" cy={cy} r={r} fill={svgFill(stops[i])} stroke={CORAL} strokeWidth="3" />
-            <ellipse cx={75 - r * 0.38} cy={cy - r * 0.42} rx={r * 0.3} ry={r * 0.18}
-              fill="#fff" opacity="0.5" transform={`rotate(-24 ${75 - r * 0.38} ${cy - r * 0.42})`} />
+            <circle cx="75" cy={cy} r={r} fill={svgFill(stops[i])} stroke={CORAL} strokeWidth="3.5" />
+            <ellipse cx={75 - r * 0.38} cy={cy - r * 0.42} rx={r * 0.32} ry={r * 0.19}
+              fill="#fff" opacity="0.55" transform={`rotate(-24 ${75 - r * 0.38} ${cy - r * 0.42})`} />
             <text x="75" y={cy + 7} textAnchor="middle" fontSize="20" fontWeight="900" fill="#fff"
               stroke="rgba(0,0,0,.12)" strokeWidth="0.6">{i + 1}</text>
           </g>
         );
       })}
+    </svg>
+  );
+}
+
+/* ── 장식용 카와이 콘 (고정 파스텔 · 헤더/빈 화면 꾸밈) ── */
+function KawaiiCone({ size = 1, className = "" }) {
+  const OL = "#C56B5C";
+  const CONE = "#F3C99B", CONE_OL = "#D98E52";
+  const PINK = "#F4A9C7", MINT = "#A6E0CF", CREAM = "#F7E7A8";
+  const hearts = [
+    [55, 34, "#7FC7E8"], [70, 24, "#8BD6A0"], [86, 21, "#B69BE0"],
+    [63, 42, "#F6D96B"], [79, 41, "#F4A66A"], [95, 35, "#F49AB4"],
+  ];
+  return (
+    <svg viewBox="0 0 160 232" width={160 * size} height={232 * size} className={className} role="img" aria-label="아이스크림 장식">
+      <defs>
+        <pattern id="wf2" width="11" height="11" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="11" height="11" fill={CONE} />
+          <path d="M0 0H11M0 0V11" stroke={CONE_OL} strokeWidth="1.6" />
+        </pattern>
+      </defs>
+      {hearts.map((h, i) => <Heart key={i} x={h[0]} y={h[1]} s={7} fill={h[2]} />)}
+      {/* 콘 */}
+      <path d="M50,148 L110,148 L80,216 Z" fill="url(#wf2)" stroke={CONE_OL} strokeWidth="4.5" strokeLinejoin="round" />
+      {/* 흘러내림 */}
+      <path d="M56,146 q8,20 1,32 q-10,-4 -8,-19 q-2,-8 7,-13 Z" fill={PINK} stroke={OL} strokeWidth="3" strokeLinejoin="round" />
+      <path d="M104,146 q-8,18 -1,30 q11,-3 8,-18 q3,-7 -7,-12 Z" fill={MINT} stroke={OL} strokeWidth="3" strokeLinejoin="round" />
+      <path d="M80,150 q6,14 0,24 q-6,-2 -6,-14 q0,-8 6,-10 Z" fill={CREAM} stroke={OL} strokeWidth="3" strokeLinejoin="round" />
+      {/* 스쿱: 아래 좌(핑크)·우(민트), 위 크림 */}
+      <circle cx="60" cy="118" r="35" fill={PINK} stroke={OL} strokeWidth="4.5" />
+      <circle cx="100" cy="118" r="35" fill={MINT} stroke={OL} strokeWidth="4.5" />
+      <path d="M48,92 a32,30 0 1,1 64,0 q-3,22 -32,22 q-29,0 -32,-22 Z" fill={CREAM} stroke={OL} strokeWidth="4.5" strokeLinejoin="round" />
+      {/* 광택 */}
+      <ellipse cx="49" cy="106" rx="10" ry="5.5" fill="#fff" opacity="0.5" transform="rotate(-25 49 106)" />
+      <ellipse cx="89" cy="106" rx="10" ry="5.5" fill="#fff" opacity="0.5" transform="rotate(-25 89 106)" />
+      <ellipse cx="68" cy="78" rx="9" ry="5" fill="#fff" opacity="0.55" transform="rotate(-25 68 78)" />
     </svg>
   );
 }
@@ -582,6 +633,7 @@ function MySeat({ goRegister }) {
     return (
       <section className="mx-auto max-w-lg">
         <div className="p-6 text-center" style={card()}>
+          <div className="mb-1 flex justify-center"><KawaiiCone size={0.5} /></div>
           <p className="text-sm font-extrabold" style={{ color: INK }}>등록 정보를 찾을 수 없어요.</p>
           <div className="mt-4 flex gap-2">
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="이름으로 찾기"
@@ -899,9 +951,12 @@ function DrawBoard({ active }) {
   }
 
   if (!rounds.length) {
-    return <p className="mx-auto max-w-lg px-4 py-12 text-center text-sm font-bold" style={{ background: CHIP, color: FAINT, borderRadius: 24 }}>
-      아직 추첨 전이에요. 3스쿱을 모으면 자동으로 응모됩니다. 🍀
-    </p>;
+    return (
+      <div className="mx-auto max-w-lg px-4 py-10 text-center" style={{ background: CHIP, borderRadius: 24 }}>
+        <div className="mb-2 flex justify-center"><KawaiiCone size={0.6} /></div>
+        <p className="text-sm font-bold" style={{ color: FAINT }}>아직 추첨 전이에요. 3스쿱을 모으면 자동으로 응모됩니다. 🍀</p>
+      </div>
+    );
   }
   const hasScoopDraw = rounds.some(([, d]) => !d.office);
   return (
@@ -1248,6 +1303,9 @@ function App() {
       <Blobs />
       <div className="mx-auto max-w-5xl">
         <header className="mb-6 text-center">
+          <div className="mb-2 flex justify-center">
+            <KawaiiCone size={0.62} />
+          </div>
           <p className="text-xs font-extrabold tracking-[0.15em]" style={{ color: FAINT }}>
             {EV.badge}
           </p>
