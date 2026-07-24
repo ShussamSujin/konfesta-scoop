@@ -332,6 +332,11 @@ function Register({ settings, onDone }) {
   async function submit() {
     const s = school.trim(), n = name.trim();
     const p = phone.replace(/[^0-9]/g, "");
+    if (!s) { setErr("소속 학교(기관)를 입력해 주세요."); return; }
+    if (schools.length && !schools.includes(s)) {
+      setErr("선도학교 명단에 없는 소속입니다. 이 활동은 AI·디지털 선도학교 교원만 참여할 수 있어요. 소속을 목록에서 선택해 주세요.");
+      return;
+    }
     if (!n) { setErr("이름을 입력해 주세요."); return; }
     if (p.length < 10 || p.length > 11) { setErr("연락처를 정확히 입력해 주세요. (숫자 10~11자리)"); return; }
     if (!scale) { setErr("우리 학교 예산 규모를 먼저 골라 주세요."); return; }
@@ -405,12 +410,19 @@ function Register({ settings, onDone }) {
           보고서 스쿱도 1개 이상 담깁니다. 순서(라운드)는 붐비지 않게 자동으로 정해져요.
         </p>
 
-        <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>학교 <span style={{ color: FAINT }}>(선택)</span></label>
+        <label className="mt-5 block text-xs font-extrabold" style={{ color: MUTED }}>
+          소속 학교(기관) <span style={{ color: DANGER }}>— 선도학교 명단에서 선택</span>
+        </label>
         <input list="school-list" value={school} onChange={(e) => setSchool(e.target.value)}
-          placeholder={schools.length ? "학교 이름 검색" : "학교 이름 입력"}
+          placeholder="소속 학교 검색"
           className="mt-1.5 w-full px-4 py-3 text-base font-bold outline-none focus:ring-2"
           style={input} />
         <datalist id="school-list">{schools.map((s) => <option key={s} value={s} />)}</datalist>
+        {school.trim() !== "" && schools.length > 0 && !schools.includes(school.trim()) && (
+          <p className="mt-1.5 px-3 py-2 text-[11px] font-bold" style={{ background: "#FDEAE4", color: DANGER, borderRadius: 12 }}>
+            명단에 없는 소속이에요. 선도학교 교원만 참여할 수 있습니다 — 목록에서 정확한 이름을 선택해 주세요.
+          </p>
+        )}
 
         <label className="mt-4 block text-xs font-extrabold" style={{ color: MUTED }}>이름</label>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="이름 입력"
@@ -1111,6 +1123,10 @@ function App() {
           </h1>
           <p className="mx-auto mt-2 max-w-xl text-xs leading-relaxed sm:text-sm" style={{ color: MUTED }}>
             {EV.desc}
+          </p>
+          <p className="mx-auto mt-3 inline-block rounded-full px-4 py-2 text-[11px] font-extrabold sm:text-xs"
+            style={{ background: "#FDEAE4", color: DANGER, border: "2px solid #F6C4BB" }}>
+            🏫 이 활동은 AI·디지털 선도학교 교원만 참여할 수 있습니다 — 명단에 있는 소속만 등록됩니다
           </p>
         </header>
 
